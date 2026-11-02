@@ -1,0 +1,216 @@
+# WC2011 (BYYP) arm9 labels for code compiled into WC2011 (variants/dimension-break/src): addr name kind (t = Thumb function, a = ARM function, d = data) note
+02081098 fs_init_file t FS_InitFile(file 0x48 B)
+0202a320 related_cards t Related Cards list of a card: (id, u16 *out or 0 = only test for one) -> count; walks the card_link rows (count literal 0x0202a4cc), lists owned cards only (0x0202b154 bit 0)
+0209d318 related_pred d 13 Related Cards group predicates (groups 0-12): the card has the name of a key card (0 Blue-Eyes White Dragon, 2 Dark Magician, 3 Harpie Lady, 4 Umi, 5 Polymerization)
+0209d0d8 archetype_pred d 112 archetype predicates read by archetype_check; Related Cards groups 13-124 are archetype group - 13
+020240d8 archetype_check t (card id, archetype n) -> nonzero when the card is in archetype n (0 for n >= 0x70)
+02022edc card_canon_id t alternate artwork id -> the main card id (0xed8-0xf13 by the table 0x0209c204, 0x1303 -> 0x12e5, 0x142d -> 0xfc9)
+02022fac card_same_name t (id a, id b) -> nonzero when both ids have the same card name
+02029e9c card_id_at t card DB index -> card id
+0208122c fs_read_file t FS_ReadFile(file, dst, len) -> bytes read
+020811a0 fs_close_file t FS_CloseFile(file)
+02082528 fs_open_rom_range t open the ROM range [top, bottom) as a file (FS_LoadOverlayInfo reads the overlay table this way)
+0207f424 rom_header t returns the RAM copy of the cartridge header
+02029e1c card_index t card id -> card_intid entry (DB index in bits 0-13, bit 14 Field Spell, bit 15 monster); 0 outside 3400..max id (bound literal 0x02029e44)
+02029e60 card_is_monster t card id -> 1 if its card_intid entry has bit 15
+02022e44 table_search t binary search (key, table, count, row size) on the s16 at each row start -> row or 0
+0202bb90 backup_write t (backup offset, src, size) -> 1 on success; skipped while the save error flag 0x0212295c is set
+0202bbd0 backup_read t (backup offset, dst, size) -> 1 on success
+0202c2a4 body_save t writes the save body 0x0212406c (0x3338 B) to its next slot (0x8500 / 0xb838)
+0202c7ec body_load t (dst, slot) reads one save body copy
+0202e080 body_init t clears and initialises the save body (new profile)
+02231a74 fusion_match t ov03: (material code, uid, ...) -> 1 if the card fits that Fusion Material slot
+021a220c uid_locate t ov03: uid -> player | zone << 8 | index << 16
+021b44b4 monster_stats t ov03: (player, zone, out) current id and stats of a field monster
+021b12d8 pile_card_id t ov03: (player, index) card id in zone 0xe (UNCONFIRMED which pile)
+0212295c save_error d nonzero after a failed backup access
+0229c33c uid_cards d ov03: per uid, u32 card word (id in bits 0-13), 8-byte stride
+0229ac94 duel_players d ov03: PlayerState[2], stride 0xb3c (LP +0, counts +0xc.., slots +0x34, hand +0x124, Deck +0x304, Extra +0x4e4, GY +0x55c, banished +0x7b4)
+0229911c player_controller d ov03: u32[2], 0 human, 1 CPU, 2 remote
+0229ab6c effect_step d ov03: resolve state machine step, 0x80 at start, 0 done
+0229ab78 cost_step d ov03: cost step, zeroed before each cost
+0229ab7c target_step d ov03: select_targets step (0x02234ca4)
+0229a7fc chain d ov03: EffectCtx[16], 0x24 B each
+0229aa3c chain_count d ov03: links on the chain
+0229aa40 chain_len d ov03: index of the link being activated or resolved
+0229ab58 chain_activating d ov03: activation machine 0x021d3e78 runs while set
+0229ab60 chain_resolving d ov03: resolve machine 0x021d49d4 runs while set
+0229a37c pending_triggers d ov03: EffectCtx[32], triggers waiting for the chain
+0229aa50 pending_count d ov03: count of pending_triggers
+0229dd54 turn_count d ov03: 0-based turn counter
+0229dd48 turn_player d ov03: player whose turn it is
+0229dd5c duel_phase d ov03: 0 draw, 1 standby, 2 Main 1, 3 battle, 4 Main 2, 5 end
+0229dd98 battle_step d ov03: Battle Phase step index (table 0x0228e1b8)
+0229dd94 end_pass_side d ov03: End Phase step: 0 or 1 in the four passes over the End Phase table 0x0228e3d8; handlers that cover either player use turn player ^ it
+0229c30c ds_flag d ov03: bit 0 set in the Damage Step window (with battle_step <= 6)
+02299b60 cmd_current d ov03: command being executed {u16 op, a, b, c}
+0229a368 cmd_count d ov03: commands queued, not executed yet
+022391cc move_event t ov03: (kind, card word) records a card move in the event list the trigger checks read (word: uid bits 0-8, player 9, from-zone 10-13, by-opponent 18, to-zone 19-22; kind 0x1e Deck to GY, 0x1f discard, 0x20 hand to GY); called at push time, during the resolve
+0229abac event_count d ov03: u32 entries in the event list (max 32); move_event resets it to 1 unless an event group is open
+0229abb4 event_kinds d ov03: u8[32] event kinds (7/8/9 Normal/Flip/Special Summon done, 0x21/0x22/0x23 summon-negation windows, 0x1e-0x20 to GY)
+0229abd4 event_words d ov03: u32[32] event words; summon words: uid 0-8, Monster Zone player 9, slot 10-13, summoner != that player 16, source zone 20-23
+0229aba4 event_group_depth d ov03: open event groups; 0x021d28a4 opens one (first open clears the list), 0x021d290c opens one without clearing, 0x021d2964 closes; while open, move_event appends
+02299458 candidates d ov03: u32[300] card words of the candidate list
+02299452 candidate_count d ov03: s16 candidate count
+0229ddc8 selected_number d ov03: picked number, yes/no answer (1 yes), multi-pick count
+02298a34 summon_uid d ov03: uid of the card being summoned (summon struct 0x02298a28)
+02298a36 summon_card_id d ov03: card id being summoned
+02298a38 summon_flags d ov03: summon flags, bit 0 Fusion Summon
+02298a2a summon_player d ov03: player whose Monster Zone receives the summon (the summoner is 0x02298a28; they differ for Grinder Golem)
+02298a2c summon_slot d ov03: Monster Zone of the summon
+0229aa58 fusion_ring d ov03: u16[128] material uids (also the target overflow ring)
+0229aa54 fusion_ring_head d ov03: ring start index
+0229ac64 fusion_id_cur d ov03: Fusion Monster being summoned
+0229ac68 fusion_uid_cur d ov03: its uid (UNCONFIRMED)
+0229ac6c fusion_mat_count d ov03: materials the Fusion needs
+0229ac78 fusion_mat_picked d ov03: materials picked
+0224a118 effect_record_find t ov03: (ctx) -> 24-B record of ctx id/category/kind/slot (variant trampoline at entry)
+0224a8c0 effect_target_ok t ov03: (ctx, player, slot, arg) -> target filter result, 0 when slot flag bit 21
+0224aeb8 effect_resolve t ov03: (ctx, arg) -> next resolve step (variant trampoline at entry)
+021d3168 trigger_register t ov03: (packed, uid, event): id 0-15, slot 16-20, category 21-23, other side 24, kind 25-30, player 31; runs the activation check, queues the trigger
+021d2fc4 link_push t ov03: (direct, packed, uid, event): direct 0 queues a pending trigger (merges a duplicate), 1 puts the link on the chain at chain_count
+021eddec trigger_check t ov03: (packed, uid, event) -> activation check of a link built from the packed word, no link answered
+021d3bb0 activation_scan t ov03: (link, u32 *slot_mask, int *n) -> 1 when it pushed: after each activation (spell speed under 3) the machine 0x021d3e78 calls it at 0x021d4908 for every new link; field cards with "when a card is activated" triggers (Royal Command, Doomcaliber Knight, Light and Darkness Dragon, White Night Dragon, Lucky Chance, ...) go straight on the chain as category-1 links, before any answer window (variant hook at the call)
+02243b2c candidate_add t ov03: (player, zone, index)
+02243b9c candidate_row_find t ov03: (id, arg) -> row index in 0x022713c4 (12-B rows {u16 id, u16 param, fn, flags}), -1 none (variant trampoline)
+02243fe0 card_candidates_count t ov03: (player, id, arg) -> candidates the row of id finds, list restored
+021c3bc8 duel_cmd_push t ov03: (op, a, b, c) queue a duel command
+021cf834 activation_announce t ov03: (ctx) command 0x2d, the ACTIVATE animation
+021c6b00 hand_to_gy t ov03: (player, card*, reason, dest zone, by_effect, as_cost) -> final zone
+021c6d58 discard_by_effect t ov03: (player, hand index, by_opponent)
+021c6988 hand_to_deck t ov03: (player, hand index, x): x 0 = Deck bottom
+021c6a0c gy_to_deck t ov03: (ctx, player, uid, x): x 0 = bottom; Fusion/Synchro to the Extra Deck
+021c7038 gy_to_hand t ov03: (ctx, player, card*)
+021c7068 banished_to_hand t ov03: (ctx, player, card*)
+021c7118 gy_banish t ov03: (player, card*, flags, x) -> 0 when banishing is locked
+021c72cc deck_to_hand t ov03: (player, card*) search
+021d21b0 deck_uid_to_gy t ov03: (player, uid, source_id, by_opponent): source_id >= 0 = by card effect
+021d2094 deck_mill_core t ov03: (player, count, by_opponent, banish, source_id) -> cards moved
+021d269c deck_shuffle t ov03: (player) command 0x55
+021abd34 pile_insert t ov03: (player, zone, info, card*) put a card word into a zone; zone 15 stores info next to it (0xc0 face-down, 0x40 from the field and due back, read by 0x0219cd08)
+021cdd4c destroy_mask t ov03: (ctx, mask, dest zone, reason): reason 2 destroyed, 0x10000000 by effect, 0x4000000 Deck bottom
+021cf388 destroy_slot t ov03: (ctx, player, slot) destroy by effect
+021c479c attach_modifier_cmd t ov03: (player, slot, card id, duration, value) command 0x35
+021a1430 slot_has_modifier t ov03: (player, zone, card id)
+0219ca28 zone_card_ptr t ov03: (player, zone, index) -> card word pointer
+021a25e8 uid_card t ov03: (uid) -> card word pointer
+0219c430 select_cards t ov03: (player, mode, card id, arg): mode 6 = pick one (CPU picker when controller 1)
+0219c510 selected_card t ov03: () -> picked card word pointer
+0219a818 show_message t ov03: (player, msg) human only
+0219aaac ask_yes_no t ov03: (ctx, msg, uid) answer in selected_number; CPU answers itself
+022349b0 ctx_target_get t ov03: (ctx, i, out*) out = player | slot << 8
+022347b0 ctx_add_target t ov03: (ctx, player, slot)
+02234d74 select_targets_default t ov03: (ctx, card) target picker, default prompt (human and CPU)
+02269314 special_summon t ov03: (player, card*, face_up, summoner id << 16 | flags) flags bit 0 Fusion Summon
+021ad870 free_monster_zones t ov03: (player)
+021b9ecc can_special_summon t ov03: (player)
+021ba404 can_special_summon_id t ov03: (player, id)
+021c5894 set_face_down t ov03: (ctx, player, slot)
+02206230 negate_chain_link t ov03: (ctx, link, destroy) -> 0 failed, 1 negated, 2 negated and moved
+0202354c hand_effect_monster t arm9: (id) -> monster effect usable from the hand
+0202345c spell_speed_of t arm9: (id) -> spell speed (Counter Trap 3)
+02204c7c resolve_field_spell t ov03: (ctx, arg) Field Spell activation resolve
+0202ac08 card_atk t arm9: (id) -> printed ATK (? = 0)
+021b104c gy_insert t ov03: (card*) executor: card into its owner's GY (zone_insert 0x021c0610 calls it at 0x021c08e2; ov05 simulations call it too)
+0219d320 duel_step t ov03: per-frame duel step; first call 0x0219af00 at 0x0219d350
+0219af00 duel_step_first t ov03: first function of the duel step chain
+0219af50 duel_reset t ov03: clears the duel state (memclear of the player blocks at 0x0219af56)
+0214c1d4 mem_clear a ov03: (dst, size) ARM memclear
+02022e14 id_in_table t arm9: (id, sorted u16 table, count) -> nonzero when listed
+02265768 summon_event_triggers t ov03: (kind 7 Normal, 8 Flip, 9 Special): last table test 0x02022e14(id, 0x0228f678, 0x23) at 0x02265c50, kind in r6
+0202a084 card_prop_ptr t arm9: (id) -> 8-B card_prop record (word 0: ATK bits 14-22, DEF 23-31 x10; word 1: frame bits 1-5, Attribute 6-9, Level 10-13, icon 14-16, Type 17-21)
+0202abf8 card_frame t arm9: (id) -> card_prop word 1 bits 1-5 (frame); the speed patch serves it from a per-duel byte table
+02243fa8 candidates_build t ov03: (player, id, arg) clears the candidate list and fills it from the row of id -> count
+023358ac ai_row_count t ov05: (player, list, link, x) rows in a CPU row list (variant trampoline)
+023359c0 ai_row_at t ov05: (player, list, index, x) -> row {u32 id | loc << 14 | param << 18, eval} (variant trampoline)
+021eef58 negate_test t ov03: (player, slot, ctx) -> 1 when the face-up monster's effects are negated; called per slot by the negation rebuild 0x021ef808, which sets slot flag bit 6
+02197e90 battle_destroy_check t ov03: (mode, a, b, attacker stats*, target stats*) battle destruction test; its id_in_table call at 0x02197f0e reads the 33 cannot-be-destroyed-by-battle ids at 0x0226d26c (player r5, slot r4)
+021ab90c link_cannot_negate t ov03: (link, activation) -> 1 when the link's activation (1) or effect (0) cannot be negated
+022061a4 negate_activation t ov03: (ctx, link, all) -> 1 negated: checks link_cannot_negate and monster immunity, sets the link's negation bytes (+9..+0xb, only +0xa with all = 0), queues the NEGATED display (command 0x42, 0x021c7734)
+021a897c damage_step_ok t ov03: (id, kind) -> 1 when the card may activate in the Damage Step (Counter Traps, 48 ids at 0x0226d8b0, per-kind lists); called by the timing check 0x021ecc6c (0x021ecd32) and the window check 0x022393cc (0x022397ca)
+0226a4f4 ai_event_card_ok t ov03: (player, id) -> 1 when a card may answer the current events in a no-link window (id switch per event kind, then 0x022393cc); called by the CPU chain entry 0x0226a75c at 0x0226a7e4 (field) and 0x0226a82e (hand)
+02022e98 same_name t arm9: (id a, id b) -> 1 when both ids carry the same card name (alias ring 0x0209bf8c, 0x2f rows)
+021c69d0 card_move t ov03: (player, zone, uid, owner, to zone, bottom, x) queues duel command 0x3e (hand_to_deck passes bottom = 1)
+021d12f4 draw_cards t ov03: (player, count) draw by card effect (0x021d0950 with by-effect 1)
+02298ad8 battle_state d ov03: current battle {s8 attacker player, s8 target player, s8 direct attack, ..., s16 attacker slot +8, s16 target slot +0xa}; 0x021a3c78(player, slot) -> 1 attacker, 2 target
+021a32b4 slot_live t ov03: (player, slot) -> 1 when the field card is face-up and its effects apply (slot flag bits 1, 6, 21 clear)
+021a3320 card_name_id t ov03: (player, slot) -> the id the field card's name counts as (Harpie Queen -> Harpie Lady, Proto-Cyber Dragon -> Cyber Dragon); variant trampoline
+021a36ec card_effect_id t ov03: (player, slot) -> the id whose effects the field card has (effect copies)
+021b021c effect_destroy_ok t ov03: (ctx, player, slot, a, protected value, b) -> 1 when the card can be destroyed by the effect of ctx, else the protected value; variant trampoline
+021afd3c effect_target_check t ov03: (ctx, player, slot) -> 1 when ctx's effect can target the card; variant trampoline
+021af7a4 spell_immune t ov03: (player, slot) -> immunity bits against Spells (1 own, 2 opponent's); variant trampoline
+021afa20 trap_immune t ov03: (player, slot) -> immunity bits against Traps (1 own, 2 opponent's); variant trampoline
+021afbdc monster_immune t ov03: (player, slot) -> immunity bits against monster effects (1 own, 2 opponent's); variant trampoline
+021cf68c tribute_mask t ov03: (player, slot mask) Tribute the masked monsters (destroy_mask to the GY, reason 0x1000)
+021ef310 st_negate_test t ov03: (player, slot, ctx) -> 1 when the face-up Spell/Trap's effects are negated; the negation rebuild 0x021ef808 calls it at 0x021ef8d6 for slots 5-10
+02239898 own_chain_ok t ov03: (link, id) -> 1 when a card may answer its own player's link (22 ids at 0x0227118c); variant trampoline
+02239a30 answer_scan t ov03: (link, player, out*) -> 3 when one of the player's cards can answer the link (field, hand, Graveyard), out = its place; variant trampoline
+021a0df8 equip_target t ov03: (player, slot) -> the card the Spell/Trap at slot is equipped to, player | slot << 8, or 0xffff (Magical Labyrinth's cost 0x021e7c3c)
+0202a608 pack_card_list t (pack id, u32 *out, max) -> count; card ids of a booster, zero-terminated; card_pack slot 1 for packs 32-42, else slot 0 (the Dimension Break build asks w11pk_slot); pack 60 takes every card
+0202b058 card_owned t (id) -> 1 when the card is owned (flag bit 0)
+02016468 heap_alloc t (size, align, kind 0) -> block from the current scene heap
+020164dc heap_free t (block)
+0214e974 store_box_roll a ov10: (store 0x02158d10, pack id) rolls the box layout of the store+0x10d4 packs (blocks of 10: 7 rare, 2 super, 1 ultra) into store+0x10c4..+0x10d0
+0214e588 store_bought a ov10: (store, entry index) -> packs selected in that entry (popcount of its 64-bit selection mask)
+021cf524 return_to_hand t ov03: (ctx, player, slot) return a field card to the hand (Compulsory Evacuation Device's resolve 0x02204910)
+021cfbc8 effect_damage t ov03: (ctx, player, amount) effect damage (Ring of Destruction 0x02210310)
+021a1c7c slot_is_tuner t ov03: (player, slot) -> 1 when the field monster is a Tuner (frame or Tuner modifiers 0x1e40, 0x2013, 0x202d, 0x1f87, 0x220d)
+0225d6d4 summon_options t ov03: (player, uid) -> summon bits of a hand card: 0x10 Normal Summon, 0x40 Set
+0224b9c8 action_arm_pick t ov03: (ctx, filter(player, zone, index) -> 0x10/0x40 bits) player action mode 6: pick a card to summon or Set (Ultimate Offering 0x0220d80c)
+02261444 action_summon t ov03: (normal summon 1 / Set 0, x, y) carries out the queued action mode 6 summon
+021a14e8 modifier_has_n t ov03: (player, zone, card id, n)
+021d2584 player_modifier t ov03: (player, card id, duration, value) player-wide modifier on slot 11
+0229ddec action_queued d ov03: player action queued
+0229de00 action_kind d ov03: queued action kind (4 Normal Summon, 6 Set)
+0229de10 action_zone d ov03: queued action zone
+02298a42 summon_retry d ov03: summon struct flag read by Ultimate Offering after its summon (nonzero: pick again)
+02298a44 summon_x d ov03: summon struct field cleared before an action mode 6 pick
+021a1e0c slot_is_effect t ov03: (player, slot) Effect Monster status, including Gemini after its second Normal Summon
+021cf924 pay_lp t ov03: (player, amount) pay a Life Point cost
+021afcbc effect_immune t ov03: (ctx, player, slot) nonzero when unaffected by this effect
+021af738 control_change_ok t ov03: (player, slot, source id) control of the monster may change
+021cf450 banish_field t ov03: (ctx, player, slot, reason) remove a field card from play
+021b9690 can_set_st t ov03: (player) may Set a Spell/Trap
+021ae58c set_zone_ok t ov03: (player, slot) usable Spell/Trap Zone
+0225bdd8 set_pick_zone t ov03: (player, owner, uid) choose a legal Spell/Trap Zone
+021c7484 set_from_pile t ov03: (player, source zone, uid, owner, target slot, face, flags) Set a card from a pile, command 0x40
+021c7cac name_announce t ov03: (player, slot, declared id) display a declared card name
+0223473c target_add_uid t ov03: (ctx, player, zone, uid) record a target with its location/version
+0226925c special_summon_impl t ov03: (player, card*, face up, position 0 attack/1 defense/2 choice, flags) Special Summon
+0225fff4 original_tribute_test t ov03: (player, slot, offset) Tribute selection filter
+02298a54 tribute_count d ov03: selected Tribute count
+02298a56 tribute_need d ov03: required Tribute count
+02298a3e tribute_mode d ov03: nonzero for Normal Set in the Tribute picker
+0229de78 set_slot d ov03: selected Spell/Trap Zone
+022c5868 ai_chain_step d ov05: s16 answer-window coroutine state
+02346f2c ai_try_row t ov05: (player, AiRow*, link, check) evaluate and queue one answer row synchronously
+0233bfec original_chain_driver t ov05: (player, link) stock chain/no-link CPU driver
+021ad8f4 can_release_cost t ov03: (player, controller, slot, mode) may Tribute this monster for a cost
+021babe8 can_banish t ov03: (player) cards may be removed from play
+02298a30 summon_position d ov03: 0 attack / Normal Summon, 1 defense / Normal Set, 2 choose
+021b20ac hand_level t ov03: (player, uid) effective Level for hand summon checks
+021a8b38 original_summon_counter t ov03: (ctx) stock summon-negating Counter Trap classification
+021b807c field_level t ov03: (player, monster slot, mode) effective Level on the field
+0202a5c4 original_pack_member t arm9: (card id, slot) primary pack membership
+0202a540 original_pack_rarity t arm9: (card id, slot) rarity in a primary pack slot
+021d6e40 target_criteria t ov03: (ctx, player, slot, mask) stock target checker behind the 10-byte filter thunks; mask bits 1 own / 2 opponent's side, 4 face-up, 8 face-down, 0x10 Monster Zone, 0x40 any field slot, 0x400 targetable (effect_target_check), 0x20000 not the ctx card, 0x200000 a Monster Zone is free once it leaves
+0224aa20 filter_mask t ov03: (ctx) -> slot mask (bit slot + 16 * player) the record's target filter passes, 0xffffffff without a filter (Raigeki's resolve 0x022048fd)
+021a4670 can_attack t ov03: (player, slot, a, b) -> 1 when the monster may declare an attack (8 callers, the CPU's in ov05 among them); variant trampoline (fx_can_attack)
+021a6abc can_attack_directly t ov03: (player, slot, except id) -> nonzero when the monster can attack directly; reads the 25 ids at 0x0226d730 through id_in_table unless except id is the monster's own id, and Dragunity Pilum unless except id is nonzero
+021bb128 battle_start t ov03: (attacker player, slot, target player, target slot >= 5 direct) fills battle_state at the attack declaration; Dragunity Pilum's halving modifier (player slot 0xb, id 0x220e) is attached here; its first call (card_effect_id at 0x021bb134) is the variant's attack-declaration hook
+0224def0 battle_decl_sub t ov03: called at the attack declaration step (battle step 1, state 1) after battle_state is filled; the variant's attack-declaration trigger scan wraps the call at 0x0224f554
+021d3230 trigger_at t ov03: (player, slot, kind, event) register a category-1 trigger of kind for the card in that field slot (attack declaration triggers: kind 0x15)
+021cf310 destroy_cards t ov03: (ctx, slot mask) destroy the masked cards by card effect (destroy_mask to the GY, reason 2)
+0224ba34 action_pick_field t ov03: (player, card id, up to: 1 or -1, filter(ctx, player, slot)) player action mode 9: pick one field card; picked slot in 0x0229de0c player, 0x0229de10 zone, 0x0229de14 index
+0224bbb0 action_picked t ov03: () -> 1 when the queued pick of action_pick_field was made
+0224ab38 field_filter_count t ov03: (ctx, filter(ctx, player, slot)) count of field cards the filter passes
+021c7538 pick_mark t ov03: () marks the card just picked (Elemental Hero Stratos's destroy-up-to-N loop), UNCONFIRMED
+0225bd84 replace_prompt t ov03: (player, replacer id, replacer uid) asks "use this card's effect instead?" through the request processor 0x0225cd44; answer copied to 0x0229de78
+021a57bc attack_target_ok t ov03: (attacker player, slot, target player, target slot, out) -> 1 when the monster may attack that target (23 callers, CPU ones included); variant trampoline (fx_attack_target_ok)
+02222654 contact_return t ov03: resolve of the Contact Fusion monsters' End Phase effect (Elemental Hero Air Neos 0x1b4d and the others): step 0x80 returns the card to the Extra Deck with 0x021cf590
+022393cc event_window_ok t ov03: (player, id) -> 1 when the card may answer the events of the current no-link window (event kind switch per id); called at 0x02239922, 0x022399ac, 0x0224c8be, 0x0226a722 (variant hook: Eternal Favorite's summon lock)
+021d36c0 hand_trigger_reg t ov03: (player, id, kind, event) register a category-2 trigger of kind for every hand copy of id (Battle Fader at the direct attack declaration, 0x021c6304)
+0225422c end_gy_trigger t ov03: (turn player, id) End Phase handler of table 0x0228e3d8: registers the kind-6 Graveyard trigger of the first copy of id, once per copy per turn (player modifier id, value uid); 0 = wait for the chain, 1 = done
+02248154 field_change_busy t ov03: () -> nonzero while a Field Spell change is still being processed (Last Resort waits on it before placing its Field Spell)
+021cf35c destroy_card t ov03: (player, slot, x, y) destroy the card in that field slot (Last Resort clears the Field Zone with it)
+02023398 can_revive_id t arm9: (id) -> 0 when the card cannot be Special Summoned from a pile by a card effect: Spirit monsters, the id tables 0x0209bb1a and 0x0209bd6c (Yubel - Terror Incarnate, ...), summon classes (14 callers, Monster Reborn's candidates among them)

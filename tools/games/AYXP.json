@@ -1,0 +1,39 @@
+{
+  "game_code": "AYXP",
+  "title": "Yu-Gi-Oh! GX Spirit Caller (Europe)",
+  "header_name": "YU-GI-OH!DS2",
+  "status": "read-only",
+  "clean_sha1": "1da50df7c210fae96dc69b3825554b9ce13b4f75",
+  "rom_size": 134217728,
+  "storage": "loose",
+  "loose_dirs": ["bin", "card"],
+  "languages": "efgijrs",
+  "card_db": {
+    "container": "bin/",
+    "langs": "efgijrs",
+    "id_base": 4000,
+    "card_count": 1460,
+    "prop_layout": "wc2008",
+    "intid_flag_bits": 0,
+    "files": {
+      "prop": "CARD_Prop.bin",
+      "pass": "CARD_Pass.bin",
+      "genre": "CARD_Genre.bin",
+      "pwcost": "CARD_PwCost.bin",
+      "link": "CARD_Link.bin",
+      "intid": "CARD_IntID.bin",
+      "sort": "CARD_Sort_{L}.bin",
+      "indx": "CARD_Indx_{L}.bin",
+      "name": "CARD_Name_{L}.bin",
+      "desc": "CARD_Desc_{L}.bin"
+    }
+  },
+  "card_art": {"container": "card/"},
+  "pack_text": {
+    "container": "bin/",
+    "langs": {"ENG": "e", "FRA": "f", "GER": "g", "ITA": "i", "JPN": "j", "SPA": "s"},
+    "files": {"indx": "PACK_Indx{pl}.bin", "name": "PACK_Name{pl}.bin", "desc": "PACK_Desc{pl}.bin"}
+  },
+  "sound": "sound/sound_data.sdat",
+  "notes": "Loose files instead of .pac archives. No card_pack or card_kana table. Code addresses not mapped."
+}

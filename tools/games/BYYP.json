@@ -1,0 +1,47 @@
+{
+  "game_code": "BYYP",
+  "title": "Yu-Gi-Oh! 5D's World Championship 2011: Over the Nexus (Europe)",
+  "header_name": "YUGIOH!WCS11",
+  "status": "read-only",
+  "clean_sha1": "7617788d197ffd45d2ab2bb6deadbf0f9874e2fa",
+  "rom_size": 134217728,
+  "storage": "pac",
+  "archive_root": "Data_arc_pac",
+  "languages": "efgijkrs",
+  "card_db": {
+    "container": "Data_arc_pac/bin2.pac",
+    "langs": "efgijkrs",
+    "id_base": 3400,
+    "card_count": 4306,
+    "prop_layout": "wc2011",
+    "intid_flag_bits": 2,
+    "files": {
+      "prop": "card_prop.bin",
+      "pass": "card_pass.bin",
+      "pack": "card_pack.bin",
+      "genre": "card_genre.bin",
+      "kana": "card_kana.bin",
+      "pwcost": "card_pwcost.bin",
+      "link": "card_link.bin",
+      "intid": "card_intid.bin",
+      "sort": "card_sort_{l}.bin",
+      "indx": "card_indx_{l}.bin",
+      "name": "card_name_{l}.bin",
+      "desc": "card_desc_{l}.bin",
+      "kana1": "card_kana1_{l}.bin",
+      "kana2": "card_kana2_{l}.bin",
+      "kana2_j": "card_kana2.bin",
+      "sort2": "card_sort2_{l}.bin"
+    },
+    "sort_by_reading": true
+  },
+  "card_art": {"container": "Data_arc_pac/card.pac"},
+  "pack_text": {
+    "container": "Data_arc_pac/bin.pac",
+    "langs": {"eng": "e", "fra": "f", "ger": "g", "ita": "i", "jpn": "j", "kor": "k", "spa": "s"},
+    "files": {"indx": "pack_indx{pl}.bin", "name": "pack_name{pl}.bin", "desc": "pack_desc{pl}.bin"}
+  },
+  "sound": "sound/sound_data.sdat",
+  "injection": {"code_base": "0x023bbc00", "arena_hi_literal": "0x02051e30", "engine_labels": "tools/engine/labels_wc2011.txt", "cpu": "arm946e-s", "lto": true, "menu_overlay": {"base": "0x022e2820", "size": "0x8000"}, "bss_windows_flag": "W11_NO_WFC", "bss_windows": ["0x02131540-0x02137f00", "0x0212eb5c-0x02130900", "0x02130980-0x02131500"]},
+  "notes": "card_prop layout differs (wc2011 in tools/carddb.py). card_intid entries carry 2 flag bits (14-15): bit 15 monster, bit 14 Field Spell. card_kana1_{l}/card_kana2_{l}: first and second search letter of the name (carddb.kana_pair); card_kana2 = card_kana2_j; card_sort2_{l}: inverse of card_sort_{l}. Card art is card_5bg24x32/card_5bg64x64, not card_5tx128."
+}

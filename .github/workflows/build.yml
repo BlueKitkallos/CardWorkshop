@@ -1,0 +1,121 @@
+name: build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            asset: CardWorkshop-windows.zip
+            armips: armips/build/Release/armips.exe
+          - os: macos-latest
+            asset: CardWorkshop-macos.zip
+            armips: armips/build/armips
+          - os: ubuntu-22.04
+            asset: CardWorkshop-linux.tar.gz
+            armips: armips/build/armips
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pyinstaller
+      - run: python -m unittest discover -s tools/community_editor -p 'test_*.py'
+      - name: armips
+        run: |
+          git clone --depth 1 --recursive https://github.com/Kingcom/armips
+          cmake -S armips -B armips/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          cmake --build armips/build --config Release
+      - run: python packaging/toolchain.py toolchain --armips ${{ matrix.armips }} --armips-src armips
+      - run: python packaging/build_app.py toolchain
+      - name: launch check
+        shell: python
+        run: |
+          import json, pathlib, subprocess, sys, time, urllib.request
+          exe = pathlib.Path('dist/CardWorkshop') / ('CardWorkshop.exe' if sys.platform == 'win32' else 'CardWorkshop')
+          for name in ('CREDITS.md', 'licenses/python/LICENSE.txt', 'licenses/ndspy', 'licenses/arm-gnu-toolchain/license.txt'):
+              if not (exe.parent / name).exists():
+                  sys.exit(f'{name} missing from the package')
+          app = subprocess.Popen([str(exe), '--no-browser', '--port', '8799'])
+          try:
+              for _ in range(60):
+                  if app.poll() is not None:
+                      sys.exit(f'app exited with {app.returncode}')
+                  try:
+                      print(json.load(urllib.request.urlopen('http://127.0.0.1:8799/api/session', timeout=2)))
+                      break
+                  except OSError:
+                      time.sleep(1)
+              else:
+                  sys.exit('app did not answer')
+          finally:
+              app.kill()
+      - name: package (windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist/CardWorkshop -DestinationPath ${{ matrix.asset }}
+      - name: package (macos)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent dist/CardWorkshop ${{ matrix.asset }}
+      - name: package (linux)
+        if: runner.os == 'Linux'
+        run: tar -czf ${{ matrix.asset }} -C dist CardWorkshop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sources-${{ matrix.os }}
+          path: build/sources.json
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: ${{ matrix.asset }}
+
+  sources:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sources-*
+          path: lists
+      - name: download and check the GPL sources
+        shell: python
+        run: |
+          import hashlib, json, pathlib, shutil, urllib.request
+          out = pathlib.Path('sources')
+          out.mkdir()
+          wanted = {}
+          for path in sorted(pathlib.Path('lists').rglob('sources.json')):
+              for s in json.loads(path.read_text()):
+                  wanted.setdefault(s['name'], s)
+          sums = []
+          for s in wanted.values():
+              req = urllib.request.Request(s['url'], headers={'User-Agent': 'card-workshop-build'})
+              with urllib.request.urlopen(req) as r, open(out / s['name'], 'wb') as f:
+                  shutil.copyfileobj(r, f)
+              digest = hashlib.sha256((out / s['name']).read_bytes()).hexdigest()
+              if s.get('sha256') and digest != s['sha256']:
+                  raise SystemExit(f"{s['name']}: sha256 {digest}, expected {s['sha256']}")
+              size = (out / s['name']).stat().st_size
+              print(f"{s['name']}: {size} bytes, sha256 {digest}")
+              sums.append(f"{digest}  {s['name']}")
+          (out / 'SHA256SUMS-sources.txt').write_text('\n'.join(sums) + '\n')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SHA256SUMS-sources.txt
+          path: sources/SHA256SUMS-sources.txt
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: sources/*

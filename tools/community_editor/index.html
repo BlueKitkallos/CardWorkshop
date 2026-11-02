@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Card Workshop</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<header><div><span class="mark">CW</span><strong>Card Workshop</strong></div><nav aria-label="Project"><button id="undo" title="Undo (Ctrl+Z)" disabled>Undo</button><button id="redo" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button><button id="openProject">Open project</button><button id="saveProject">Save project</button><button id="export" class="primary">Export patch + project</button></nav></header>
+<input type="file" id="donorFile" accept=".nds,.zip" hidden><input type="file" id="romFile" accept=".nds" hidden><input type="file" id="projectFile" accept=".json,.wcmod" hidden><input type="file" id="artFile" accept="image/png,image/jpeg,image/webp" hidden>
+<div id="welcome"><h1>Card Workshop</h1><p>Open a clean WC2011 Europe ROM to start.</p><button id="start" class="primary">Open ROM</button></div>
+<div id="workspace" hidden>
+<div class="toolbar"><input id="projectName" aria-label="Project name"><div class="tabs"><button data-tab="packs" class="active">Packs</button><button data-tab="decks">CPU decks</button><button data-tab="opponents">Free Duel CPUs</button><button data-tab="banlists">Banlists</button><button data-tab="patches">Optional patches</button></div><span class="tag">WC2011 · EUROPE</span></div>
+<main><aside class="library"><div class="section-label"><span id="listTitle">PACK LIBRARY</span><button id="add">+ New pack</button></div><input id="listSearch" placeholder="Find a pack…" aria-label="Search library"><div id="list"></div></aside><section id="editor"></section><aside class="inspector"><h2>Cards</h2><input id="cardSearch" placeholder="Find a card…" aria-label="Search cards"><div id="results"></div><div id="cardInfo"></div></aside></main>
+<footer><span id="status" role="status">Ready</span><button id="validate">Check project</button><span id="dirty"></span></footer>
+</div><dialog id="issues"><h2>Project check</h2><div id="issueList"></div><button id="closeIssues">Close</button></dialog><div id="toast" role="alert" hidden><span id="toastText"></span><button id="dismissToast" aria-label="Dismiss message">Close</button></div>
+</body></html>
