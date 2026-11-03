@@ -1,13 +1,6 @@
 {
  "name": "Retro-Genesys 0.2",
  "point_cap": 100,
- "point_names": {
-  "Amazoness Archer": "91869203",
-  "Five-Headed Dragon": "99267150",
-  "Summoner Monk": "423585",
-  "Temple of the Kings": "29762407",
-  "Thunder King Rai-Oh": "71564252"
- },
  "points": {
   "A Hero Lives": 5,
   "Abyss Soldier": 1,

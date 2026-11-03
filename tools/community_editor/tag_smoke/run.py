@@ -22,7 +22,7 @@ import inject
 import mlstate
 import patch
 import view_deal
-from w11showcase import Gdb, FRAME_FN
+from w11gdb import Gdb
 
 ALL_PATCHES = ['cpu-speed', 'view-mode', 'flash-fixes', 'card-fixes', 'text-fixes', 'wfc-shop']
 LIST = 0x021610a0

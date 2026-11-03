@@ -220,7 +220,7 @@ class Adapter:
         source = json.loads((Path(__file__).resolve().parent / 'data/retro-genesys.json').read_text(encoding='utf-8'))
         cards, skipped = {}, []
         for name, value in source['points'].items():
-            cid = self.resolve(source['point_names'].get(name, name))
+            cid = self.resolve(name)
             if cid is None or cid not in self.by_id:
                 skipped.append(name)
                 continue
