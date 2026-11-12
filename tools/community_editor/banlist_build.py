@@ -41,8 +41,8 @@ def prepare(folder, src, adapter, project, changes):
         files.append(filename)
         values = card_values(adapter, bl)
         entries = [(cid, value) for cid, value in values.items() if value != 3] if bl['id'] == 'classic' else []
-        if len(entries) > banlist.W11_LIST_ENTRIES:
-            raise ValueError(f'{bl["name"]}: too many limited cards. The game allows {banlist.W11_LIST_ENTRIES}, and each artwork counts.')
+        if len(entries) > banlist.W11_STOCK_LIST_ENTRIES:
+            raise ValueError(f'{bl["name"]}: too many limited cards. The game allows {banlist.W11_STOCK_LIST_ENTRIES}, and each artwork counts.')
         header = struct.pack('<H', ids[i] - banlist.NAME_BASE) + base_header[2:]
         raw = banlist.build(entries, header)
         if bl['id'] == 'points':

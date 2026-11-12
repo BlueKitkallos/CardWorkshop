@@ -337,16 +337,15 @@ class Adapter:
         else:
             with tempfile.TemporaryDirectory(prefix='wc-project-build-') as folder:
                 qol = {'cpu-speed', 'view-mode', 'flash-fixes', 'card-fixes', 'text-fixes'} & set(p['patches'])
-                if qol:
-                    import w11speed
-                    import w11fast
-                    base = w11speed.Rom11(str(self.path))
-                    ui = 'flash-fixes' in qol
-                    w11fast.apply(base, str(Path(folder) / 'qol'), speed='cpu-speed' in qol,
-                                  view='view-mode' in qol, cutin=ui, fades=ui, sound=ui,
-                                  card_fixes='card-fixes' in qol, text_fixes='text-fixes' in qol)
-                    base.save(str(Path(folder) / 'qol.nds'), compress=True)
-                    rom = game.open_rom(str(Path(folder) / 'qol.nds'))
+                import w11speed
+                import w11fast
+                base = w11speed.Rom11(str(self.path))
+                ui = 'flash-fixes' in qol
+                w11fast.apply(base, str(Path(folder) / 'qol'), speed='cpu-speed' in qol,
+                              view='view-mode' in qol, cutin=ui, fades=ui, sound=ui, display=ui,
+                              card_fixes='card-fixes' in qol, text_fixes='text-fixes' in qol)
+                base.save(str(Path(folder) / 'qol.nds'), compress=True)
+                rom = game.open_rom(str(Path(folder) / 'qol.nds'))
                 if needs_runtime:
                     import inject
                     from runtime_build import prepare
@@ -374,6 +373,7 @@ class Adapter:
             original = self.path.read_bytes()
             target = bytearray(rom.save(updateDeviceCapacity=True))
             target[0x1000:0x1004] = original[0x1000:0x1004]
+            game.keep_header_crc32(target, original)
             capacity = 0x20000 << target[0x14]
             target.extend(b'\xff' * (capacity - len(target)))
             target = bytes(target)

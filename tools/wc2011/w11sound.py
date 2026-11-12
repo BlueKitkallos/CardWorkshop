@@ -1,4 +1,5 @@
 """WC2011 sound header (ds_data_hed.sdat) and the sound effect room fix shared by the music build and the QoL patch."""
+import copy
 import struct
 import sys
 
@@ -10,6 +11,26 @@ TEMPLATE_ID = 5
 NO_STREAM_BUFFER = 0x80000000
 SE_ARCHIVE = 1
 HED_PATH, SDAT_PATH = 'sound/ds_data_hed.sdat', 'sound/sound_data.sdat'
+SOUND_BUFFER, SOUND_BUFFER_SIZE = 0x020bb9c4, 350000
+SOUND_HEAP_START = (SOUND_BUFFER + 0xe00 + 31) & ~31
+VOW_BYTES = 4
+FRAME_HEAP_HEAD, SND_HEAP_GROUP_HEAD, SND_BLOCK_HEAD = 0x40, 0x20, 0x20
+
+
+def index_size(sdat_data, hed_data):
+    up = lambda x, n: (x + n - 1) // n * n
+    word = struct.unpack_from('<I', hed_data, 4)[0]
+    info_size = struct.unpack_from('<I', sdat_data, 0x1c)[0]
+    fat_size = struct.unpack_from('<I', sdat_data, 0x24)[0]
+    end = up(up(word & 0x3fffffff, 4) + VOW_BYTES, 32)
+    if not word & NO_STREAM_BUFFER:
+        end += 0x3000
+    return (end + FRAME_HEAP_HEAD + SND_HEAP_GROUP_HEAD + SND_BLOCK_HEAD + up(info_size, 32)
+            + SND_BLOCK_HEAD + up(fat_size, 32))
+
+
+def sound_heap():
+    return SOUND_BUFFER + SOUND_BUFFER_SIZE - SOUND_HEAP_START - 0x38
 
 
 class Hed:
@@ -117,6 +138,117 @@ def note_defs(ins):
     if isinstance(ins, B.RegionalInstrument):
         return [r.noteDefinition for r in ins.regions]
     return []
+
+
+U8_ARGS = set(range(0xc0, 0xd7))
+S16_ARGS = {0xe0, 0xe1, 0xe3}
+
+
+def varlen(data, pc):
+    value = 0
+    while True:
+        byte = data[pc]
+        pc += 1
+        value = value << 7 | byte & 0x7f
+        if byte < 0x80:
+            return value, pc
+
+
+def sseq_events(seq):
+    data = seq.save()
+    data = data[0] if isinstance(data, tuple) else data
+    return data[struct.unpack_from('<I', data, 0x18)[0]:]
+
+
+def reached_notes(seq):
+    data = sseq_events(seq)
+    reached, seen = set(), set()
+    todo = [(0, 0, 0, (), ())]
+    while todo:
+        state = todo.pop()
+        if state in seen:
+            continue
+        seen.add(state)
+        pc, prog, transpose, stack, loops = state
+        if len(stack) > 16 or len(loops) > 16:
+            raise ValueError(f'offset {pc:#x}: calls or loops nested deeper than 16')
+        if pc >= len(data):
+            raise ValueError(f'offset {pc:#x}: past the end of the sequence')
+        cmd = data[pc]
+        if cmd < 0x80:
+            reached.add((prog, min(max(cmd + transpose, 0), 127)))
+            todo.append((varlen(data, pc + 2)[1], prog, transpose, stack, loops))
+        elif cmd == 0x80:
+            todo.append((varlen(data, pc + 1)[1], prog, transpose, stack, loops))
+        elif cmd == 0x81:
+            value, nxt = varlen(data, pc + 1)
+            todo.append((nxt, value, transpose, stack, loops))
+        elif cmd == 0x93:
+            todo += [(pc + 5, prog, transpose, stack, loops), (int.from_bytes(data[pc + 2:pc + 5], 'little'), 0, 0, (), ())]
+        elif cmd == 0x94:
+            todo.append((int.from_bytes(data[pc + 1:pc + 4], 'little'), prog, transpose, stack, loops))
+        elif cmd == 0x95:
+            todo.append((int.from_bytes(data[pc + 1:pc + 4], 'little'), prog, transpose, stack + (pc + 4,), loops))
+        elif 0xb0 <= cmd <= 0xbd:
+            todo.append((pc + 4, prog, transpose, stack, loops))
+        elif cmd == 0xc3:
+            todo.append((pc + 2, prog, data[pc + 1] - 256 if data[pc + 1] >= 128 else data[pc + 1], stack, loops))
+        elif cmd == 0xd4:
+            todo.append((pc + 2, prog, transpose, stack, loops + (pc + 2,)))
+        elif cmd in U8_ARGS:
+            todo.append((pc + 2, prog, transpose, stack, loops))
+        elif cmd in S16_ARGS or cmd == 0xfe:
+            todo.append((pc + 3, prog, transpose, stack, loops))
+        elif cmd == 0xfc:
+            if loops:
+                todo += [(loops[-1], prog, transpose, stack, loops), (pc + 1, prog, transpose, stack, loops[:-1])]
+            else:
+                todo.append((pc + 1, prog, transpose, stack, loops))
+        elif cmd == 0xfd:
+            if stack:
+                todo.append((stack[-1], prog, transpose, stack[:-1], loops))
+        elif cmd != 0xff:
+            raise ValueError(f'offset {pc:#x}: command {cmd:#04x} (random, variable or unknown)')
+    return reached
+
+
+def note_index(ins, key):
+    if isinstance(ins, B.SingleNoteInstrument):
+        return 0
+    if isinstance(ins, B.RangeInstrument):
+        i = key - ins.firstPitch
+        return i if 0 <= i < len(ins.noteDefinitions) else None
+    if isinstance(ins, B.RegionalInstrument):
+        return next((i for i, r in enumerate(ins.regions) if key <= r.lastPitch), None)
+    return None
+
+
+def trim_bank(bank, reached):
+    out = copy.deepcopy(bank)
+    used = {}
+    for prog, key in reached:
+        ins = out.instruments[prog] if prog < len(out.instruments) else None
+        i = note_index(ins, key) if ins else None
+        if i is not None:
+            used.setdefault(prog, set()).add(i)
+    for prog, ins in enumerate(out.instruments):
+        if prog not in used:
+            out.instruments[prog] = None
+            continue
+        lo, hi = min(used[prog]), max(used[prog])
+        keep = note_defs(ins)[lo]
+        if isinstance(ins, B.RangeInstrument):
+            ins.noteDefinitions = [nd if i in used[prog] else copy.deepcopy(keep)
+                                   for i, nd in enumerate(ins.noteDefinitions) if lo <= i <= hi]
+            ins.firstPitch += lo
+        elif isinstance(ins, B.RegionalInstrument):
+            ins.regions = ins.regions[:hi + 1]
+            for i, r in enumerate(ins.regions):
+                if i not in used[prog]:
+                    r.noteDefinition = copy.deepcopy(keep)
+    while out.instruments and out.instruments[-1] is None:
+        out.instruments.pop()
+    return out
 
 
 def heap_block(size):

@@ -17,6 +17,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 sys.path.insert(1, os.path.dirname(HERE))
+import game
+import inject
 import mlstate
 import ydc
 
@@ -51,9 +53,9 @@ TOOLCHAIN = os.path.expanduser(os.environ.get('ARM_TOOLCHAIN', '~/tools/arm-gnu-
 CFLAGS = ['-mcpu=arm946e-s', '-mthumb', '-mthumb-interwork', '-O2', '-ffreestanding', '-nostdlib', '-fno-builtin',
           '-Wall', '-Werror']
 
-RIG_BASE = 0x023d0000
-RIG_END = 0x023de000
-ARENA_HI_LIT, ARENA_HI = 0x02051e30, 0x023e0000
+ARENA_HI_LIT, ARENA_HI = inject.arena_hi('BYYP')
+RIG_END = ARENA_HI - 0x2000
+RIG_BASE = RIG_END - 0xe000
 BOOT_CB_LIT, BOOT_CB = 0x02015fc8, 0x021522f4
 SAVE_ID_BL, SAVE_ID = 0x02015f0e, 0x0202d3e0
 SAVE_CHECK = 0x02015f50
@@ -198,6 +200,8 @@ class Image:
 class Rom11:
     def __init__(self, path):
         self.rom = ndspy.rom.NintendoDSRom.fromFile(path)
+        with open(path, 'rb') as f:
+            self.header = f.read(0x200)
         if bytes(self.rom.idCode) not in (b'BYYP', b'YG8P'):
             raise SystemExit(f'{path}: game code {bytes(self.rom.idCode)!r}, expected BYYP/YG8P (WC2011 EU/Dimension Break)')
         self.code = ndspy.code.MainCodeFile(self.rom.arm9, self.rom.arm9RamAddress, self.rom.arm9PostData)
@@ -227,7 +231,11 @@ class Rom11:
             o.compressed = compress
             self.rom.files[o.fileID] = o.save(compress=compress)
         self.rom.arm9OverlayTable = ndspy.code.saveOverlayTable(self.ovs)
-        self.rom.saveToFile(path)
+        out = bytearray(self.rom.save())
+        out[0x1000:0x1004] = bytes(4)
+        game.keep_header_crc32(out, self.header)
+        with open(path, 'wb') as f:
+            f.write(out)
 
 
 def compile_rig(work, base=RIG_BASE, defs=()):
@@ -283,7 +291,7 @@ def duel_table(rom, duels):
         for side in range(2):
             deck = ydc.Deck.parse(files[f'deck/{d[("a", "b")[side]]}.ydc'])
             try:
-                w11duel.arrange(deck.main, spec['slots'][side])
+                w11duel.arrange(w11duel.take_field(deck.main, spec, side), spec['slots'][side])
             except ValueError as e:
                 raise SystemExit(f'duel {i}, side {side}: {e}')
         out += struct.pack('<IIII', d['seed'], d['first'], *chara) + b''.join(recs) + w11duel.encode(spec)
@@ -362,6 +370,7 @@ def build_rig(out, duels, speed=False, work=None, base=None, no_anim=0, hold_res
               view=False, bgm=0, no_se=False, idle=False, stream_log=False, shared_decks=False):
     work = work or os.path.join(WORK, 'rig_work')
     r = Rom11(base or ROM11)
+    inject.move_arena_hi(r.arm9.d, r.arm9.base, 'BYYP')
     base_hi = r.arm9.word(ARENA_HI_LIT)
     runtime = next((sec for sec in r.code.sections if len(sec.data) >= 16 and u32(sec.data, 4) == 0x31314453), None)
     rig_base, defs, n_prof = RIG_BASE, (), 0
@@ -437,7 +446,7 @@ def build_rig(out, duels, speed=False, work=None, base=None, no_anim=0, hold_res
     view_syms = {}
     if speed:
         import w11fast
-        view_syms = w11fast.apply(r)
+        view_syms = w11fast.apply(r, os.path.join(WORK, 'w11fast'))
         vm_state = view_syms.get('vm_state')
     elif runtime is not None:
         vm_state = runtime.ramAddress
@@ -553,6 +562,8 @@ def read_rig(ram, syms, n_prof=0, ev_n=EV_N, stream_log=False):
         res['f_duel'] = ram.u32(syms['rig_f_duel'])
     if 'rig_turns' in syms:
         res['turns'] = ram.u32(syms['rig_turns'])
+    res['think_drops'] = ram.think_drops()
+    res['think_max_s'] = ram.think_max_s()
     if 'story_initial_decks' in syms:
         base = syms['story_initial_decks']
         counts = [min(60, ram.u32(base + s * 4)) for s in range(2)]
@@ -615,6 +626,7 @@ def summary(res):
     return (f'duel {res["index"]}: result {res["result"]} LP {res["lp0"]}/{res["lp1"]} hash {res["hash"]:08x} '
             f'duel {secs:.1f} s, engine steps {res["steps"]} ({res["ai_steps"]} with AI), AI busy {ai:.1f} s, '
             f'AI calls {sum(res["calls"][1:8])}, events {res["n_ev"]} lost {res["lost_ev"]}, SEs lost {res.get("se_lost")}, '
+            f'think drops {res.get("think_drops")}, '
             f'wall {res["wall"]} s')
 
 

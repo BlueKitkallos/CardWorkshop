@@ -10,6 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 sys.path.insert(1, os.path.dirname(HERE))
+import inject
 
 SRC = os.path.join(ROOT, 'mod', 'w11fast')
 TOOLCHAIN = os.path.expanduser(os.environ.get('ARM_TOOLCHAIN', '~/tools/arm-gnu-toolchain/bin'))
@@ -69,10 +70,19 @@ ZONE_ID_HEAD = bytes.fromhex('feb50d1c009214222e1c5643')
 DUEL_STEPS = 0x0228faa8
 HEAP_CREATE_CALL, HEAP_CREATE = 0x02016698, 0x0207c3fc
 DUEL_SETUP, DUEL_LOOP, DUEL_EXIT = 0x02144d40, 0x02145fc0, 0x021462a0
+START_CMD_CALL, CMD_PUSH = 0x0219b0e8, 0x021c3bc8
+REPLAY_PROMPT_CALL, SET_CALLBACK = 0x0201950e, 0x02014ff0
+
+AP_STUBS = 0x02000500
+AP_STUBS_OLD = bytes.fromhex('1ae8ad575da5bad81081ace525b616511bb4b098bac1b499db4e18e641dc309b4953c3c44fbea6f8f0e8f00e'
+                             '922d9c718fd3383f002204df70475d1728c707220123a86f8978cdb757c91c06')
+AP_STUBS_NEW = bytes.fromhex('00009fe51eff2fe1cfb3000000009fe51eff2fe177b1000007402de91c009fe51c109fe5002091e5020050e1'
+                             '14009f05000081050c0080023c0081050780bde830fc2d02e4e42d0200260002')
+AP_HOOK, AP_HOOK_OLD, AP_HOOK_NEW = 0x020009f8, bytes.fromhex('1eff2fe1'), bytes.fromhex('c6feffea')
 
 VIEW_SRC = os.path.join(ROOT, 'mod', 'w11view')
 FIX_SRC = os.path.join(ROOT, 'mod', 'w11fix')
-ARENA_HI_LIT, ARENA_HI = 0x02051e30, 0x023e0000
+ARENA_HI_LIT, ARENA_HI = inject.arena_hi('BYYP')
 MENU_DEFAULT, MENU_DEFAULT_OLD = 0x0214da8c, 0xea000169
 FREE_DUEL_ENTRY, FREE_DUEL_ITEMS, FREE_DUEL_N = 0x0215c5c4, 0x0215c3a8, 6
 VIEW_ID, VIEW_LABEL = 0x2007, 0x1c35 - 3000
@@ -111,6 +121,12 @@ SET_BRIGHT, SET_BRIGHT_HEAD = 0x0208278c, bytes.fromhex('002902d100210180704704d
 CUTIN_REQUEST_CALL, CUTIN_SETUP = 0x021906a8, 0x0218bf0c
 CUTIN_RESTORED, CUTIN_RESTORED_HEAD = 0x02188dc0, struct.pack('<5I', 0xe59f1030, 0xe5910000, 0xe3c00a0e, 0xe3800a06, 0xe5810000)
 FRAME_CALL, FRAME_UPDATE = 0x020161aa, 0x020176f0
+SUMMON_BG_CLEARS, SUMMON_BG_CLEAR_OLD, SUMMON_BG_CLEAR = (0x02164868, 0x02164954), 0xe3c20001, 0xe3c20005
+MATERIAL_DRAW_CALLS = ((0x021698c0, 0xebfffb06), (0x021698f8, 0xebfffaf8))
+PANEL_FRAME_LOAD, GFX_LOAD = 0x02020f20, 0x0201c03c
+PANEL_FRAME_FREE, HEAP_FREE = 0x02020f48, 0x02016aa8
+PANEL_JOB_DONE, PANEL_JOB_FREE = 0x02021020, 0x020202a5
+JOB_UPLOAD_CALL = 0x02025c84
 
 
 def record_count(rom, name):
@@ -156,10 +172,9 @@ def pack_help_texts(blob, syms, base):
     blob[syms['pe_text_data'] - base:syms['pe_text_data'] - base + len(data)] = data
 
 
-def apply_view(r, work=None, think=True, cutin=True, menus=True, fades=True):
+def apply_view(r, work, think=True, cutin=True, menus=True, fades=True, display=True):
     """View Mode: a CPU-vs-CPU duel picked from Free Duel, shown as a spectator. Code in main RAM below the arena top."""
-    work = work or os.path.join(ROOT, 'build', 'w11fast')
-    skip = () if cutin else ('cutin.c',)
+    skip = (() if cutin else ('cutin.c',)) + (() if display else ('display.c',))
     blob, _ = compile_code(work, VIEW_SRC, 'w11view', ARENA_HI - 0x4000, ARENA_HI, skip)
     base = (ARENA_HI - len(blob)) & ~0xff
     blob, syms = compile_code(work, VIEW_SRC, 'w11view', base, ARENA_HI, skip)
@@ -168,6 +183,7 @@ def apply_view(r, work=None, think=True, cutin=True, menus=True, fades=True):
     blob = bytearray(blob)
     ov3, ov7, ov18 = r.ov[3], r.ov[7], r.ov[18]
     r.ov[31].hook(0x02165010, syms['story_duel'], 0x02016d68, arm_site=True)
+    r.arm9.hook(REPLAY_PROMPT_CALL, syms['story_replay_prompt'], SET_CALLBACK)
     # Initial arrangement runs after the native shuffle. Effect shuffles below
     # replant only outstanding explicit draws, using copies still in the deck.
     initial = [(at, target) for at, target in __import__('w11speed').thumb_calls(ov3)
@@ -176,6 +192,9 @@ def apply_view(r, work=None, think=True, cutin=True, menus=True, fades=True):
         raise SystemExit('normal duel setup: expected two initial deck shuffles')
     for at, _ in initial:
         ov3.hook(at, syms['story_initial_shuffle'], 0x021a7b7c)
+    if ov3.target(START_CMD_CALL) & ~1 != CMD_PUSH or ov3.word(START_CMD_CALL - 8) != 0x21002001:
+        raise SystemExit(f'normal duel setup: {START_CMD_CALL:#x} is not the duel-start command push')
+    ov3.hook(START_CMD_CALL, syms['story_start_cmd'], CMD_PUSH)
     for start, end, target, wrapper in (
         (0x021c0bb4, 0x021c0c54, 0x021a7b7c, 'story_effect_shuffle'),
         (0x02253a04, 0x02253e36, 0x021d0950, 'story_normal_draw'),
@@ -256,15 +275,25 @@ def apply_view(r, work=None, think=True, cutin=True, menus=True, fades=True):
         ov3.write(CUTIN_RESTORED, arm_blx(CUTIN_RESTORED, syms['cutin_restored'] & ~1) + struct.pack('<4I', *[ARM_NOP] * 4),
                   CUTIN_RESTORED_HEAD)
         r.arm9.hook(FRAME_CALL, syms['cutin_frame_start'], FRAME_UPDATE)
+    if display:
+        from w11speed import arm_blx
+        for at in SUMMON_BG_CLEARS:
+            ov3.set_word(at, SUMMON_BG_CLEAR, SUMMON_BG_CLEAR_OLD)
+        for at, old in MATERIAL_DRAW_CALLS:
+            ov3.write(at, arm_blx(at, syms['material_draw'] & ~1), struct.pack('<I', old))
+        r.arm9.bl(PANEL_FRAME_LOAD, syms['panel_frame_hold'] & ~1, GFX_LOAD)
+        r.arm9.bl(PANEL_FRAME_FREE, syms['panel_frame_free'] & ~1, HEAP_FREE)
+        r.arm9.set_word(PANEL_JOB_DONE, syms['panel_job_done'], PANEL_JOB_FREE)
+        r.arm9.bl(JOB_UPLOAD_CALL, syms['panel_job_upload'] & ~1, GFX_LOAD)
     ov3.set_word(DUEL_STEPS + 8, syms['vm_loop'])
     ov3.set_word(DUEL_STEPS + 12, syms['vm_exit'])
     r.extra.append((bytes(blob), base))
     return syms
 
 
-def apply_fixes(r, work=None, cards=True, duel=True):
+def apply_fixes(r, work, cards=True, duel=True):
     """Base-game bug fixes shared with Dimension Break (mod/w11fix): code in main RAM below the arena top."""
-    work = os.path.join(work or os.path.join(ROOT, 'build', 'w11fast'), 'w11fix')
+    work = os.path.join(work, 'w11fix')
     srcs, asms = [], []
     if cards:
         srcs += ['fix_cards.c', 'fix_cpu.c', 'qol/fix_qol.c']
@@ -281,7 +310,6 @@ def apply_fixes(r, work=None, cards=True, duel=True):
     blob, syms = compile_code(work, FIX_SRC, 'w11fix', base, hi, srcs=srcs)
     blob += bytes(-len(blob) % 4)
     r.arm9.set_word(ARENA_HI_LIT, base, hi)
-    import inject
     mods = {f'ov{i:02d}.bin': img for i, img in r.ov.items()}
     for name, img in mods.items():
         with open(os.path.join(work, name), 'wb') as f:
@@ -304,13 +332,15 @@ def apply_fixes(r, work=None, cards=True, duel=True):
     return syms
 
 
-def apply(r, work=None, speed=True, view=True, genre_cache=True, cutin=True, fades=True, sound=True,
-          card_fixes=True, text_fixes=True, duel_fixes=True):
+def apply(r, work, speed=True, view=True, genre_cache=True, cutin=True, fades=True, sound=True,
+          card_fixes=True, text_fixes=True, duel_fixes=True, display=True):
     """Patch a w11speed.Rom11 (arm9 and overlay images plus extra arm9 autoload sections) in place.
     duel_fixes go with view (the QoL option); card_fixes also fix card text, text_fixes the other text errors."""
+    apply_apfix(r)
+    inject.move_arena_hi(r.arm9.d, r.arm9.base, 'BYYP')
     syms = apply_speed(r, work, genre_cache=genre_cache) if speed else {}
-    if view or fades or cutin:
-        syms.update(apply_view(r, work, think=speed, cutin=cutin, menus=view, fades=fades))
+    if view or fades or cutin or display:
+        syms.update(apply_view(r, work, think=speed, cutin=cutin, menus=view, fades=fades, display=display))
     if card_fixes or (view and duel_fixes):
         syms.update(apply_fixes(r, work, cards=card_fixes, duel=view and duel_fixes))
     if card_fixes or text_fixes:
@@ -322,8 +352,15 @@ def apply(r, work=None, speed=True, view=True, genre_cache=True, cutin=True, fad
     return syms
 
 
-def apply_speed(r, work=None, genre_cache=True):
-    blob, syms = compile_code(work or os.path.join(ROOT, 'build', 'w11fast'))
+def apply_apfix(r):
+    for at, old, new in ((AP_STUBS, AP_STUBS_OLD, AP_STUBS_NEW), (AP_HOOK, AP_HOOK_OLD, AP_HOOK_NEW)):
+        o = r.arm9.o(at)
+        if bytes(r.arm9.d[o:o + len(new)]) != new:
+            r.arm9.write(at, new, old)
+
+
+def apply_speed(r, work, genre_cache=True):
+    blob, syms = compile_code(work)
     blob = bytearray(blob)
     struct.pack_into('<I', blob, syms['genre_count'] - CODE_BASE, record_count(r.rom, 'CARD_Genre.bin') if genre_cache else 0)
     itcm = next((sec for sec in r.code.sections if sec.ramAddress == ITCM), None)
@@ -361,6 +398,10 @@ def sha1(path):
     return h.hexdigest()
 
 
+def work_dir(out):
+    return os.path.join(ROOT, 'build', 'w11fast', os.path.splitext(os.path.basename(out))[0])
+
+
 def cmd_build(a):
     import w11speed
     import patch
@@ -369,7 +410,8 @@ def cmd_build(a):
         raise SystemExit(f'{a.rom}: sha1 {got}, not the WC2011 EU dump this patch is made for '
                          f'(Yu-Gi-Oh! 5D\'s World Championship 2011: Over the Nexus, Europe, BYYP, sha1 {EU_SHA1})')
     r = w11speed.Rom11(a.rom)
-    apply(r, speed=not a.view_only, genre_cache=not a.no_genre_cache, cutin=not a.no_cutin_fix,
+    apply(r, work_dir(a.out), speed=not a.view_only, genre_cache=not a.no_genre_cache, cutin=not a.no_cutin_fix,
+          display=not a.no_display_fixes,
           card_fixes=not (a.no_card_fixes or a.view_only), text_fixes=not (a.no_text_fixes or a.view_only),
           duel_fixes=not (a.no_duel_fixes or a.view_only))
     r.save(a.out, compress=True)
@@ -396,6 +438,8 @@ def main():
                     help='use stock genre reads, preserving duel heap for animation in large mods')
     ap.add_argument('--no-cutin-fix', action='store_true',
                     help='leave out the battle cut-in green band fix (Dimension Break carries its own)')
+    ap.add_argument('--no-display-fixes', action='store_true',
+                    help='leave out the Fusion/Synchro animation and card panel display fixes (Dimension Break carries its own)')
     ap.add_argument('--no-card-fixes', action='store_true',
                     help='leave out the card effect fixes and their card text (Dimension Break builds its own from mod/w11fix)')
     ap.add_argument('--no-text-fixes', action='store_true',

@@ -249,7 +249,7 @@ def decode_dl(dl):
             else:
                 vtx = [vtx[k] + s16(p[0] >> s, 10) for k, s in enumerate((0, 10, 20))]
             cur['verts'].append({'pos': tuple(v / 4096.0 * k for v, k in zip(vtx, scale)), 'raw': tuple(vtx), **state})
-        elif op == 0x00:
+        elif op in (0x00, 0x29, 0x2a, 0x2b, 0x30, 0x31, 0x32, 0x33, 0x34):
             pass
         else:
             raise ValueError(f'GX command {op:#x} not handled')
@@ -958,6 +958,7 @@ def run_sbc(m, local=None):
     n = len(m['nodes'])
     world, parent = [np.eye(4)] * n, [None] * n
     stack, slot_node, slot_scaled = {}, {}, {}
+    body_slots = None
     cur, cur_node, scaled = np.eye(4), None, False
     mat, draws = None, []
     for op, p in sbc_ops(m['sbc']):
@@ -983,9 +984,12 @@ def run_sbc(m, local=None):
             mat = p[0]
         elif base == 0x05:
             draws.append({'shape': p[0], 'mat': mat, 'node': cur_node, 'scaled': scaled})
+            if p[0] == 0 and body_slots is None:
+                body_slots = dict(slot_node)
         elif base == 0x09:
             raise ValueError('envelope (0x09) skinning not supported yet')
-    return {'world': world, 'parent': parent, 'slot_node': slot_node, 'slot_scaled': slot_scaled, 'draws': draws,
+    # Only the body shape restores slots. A slot stored again after it (npc33's hip slot, later neck_spine) means its node at that draw.
+    return {'world': world, 'parent': parent, 'slot_node': {**slot_node, **(body_slots or {})}, 'slot_scaled': slot_scaled, 'draws': draws,
             'pos_scale': struct.unpack_from('<i', m['info'], 8)[0] / 4096}
 
 
@@ -1329,6 +1333,76 @@ def strips(tris):
         for t in best[1]:
             used[t] = True
         out.append(best[0])
+
+
+def occlusion_order(units, size=(256, 192), fov=30.0, tol=0.15, rounds=8):
+    tris = np.array([t for u in units for t in u], float)
+    owner = np.repeat(np.arange(len(units)), [len(u) for u in units])
+    lo, hi = tris.reshape(-1, 3).min(0), tris.reshape(-1, 3).max(0)
+    at, h = (lo + hi) / 2, max(hi - lo)
+    W, H = size
+    s = H / 2 / math.tan(math.radians(fov / 2))
+    n = len(units)
+    occ = np.zeros((n, n))
+    for az in range(-180, 180, 30):
+        for el in (15, 35, 55):
+            a, e = math.radians(az), math.radians(el)
+            eye = at + 2.4 * h * np.array([math.sin(a) * math.cos(e), math.sin(e), math.cos(a) * math.cos(e)])
+            f = (at - eye) / np.linalg.norm(at - eye)
+            r = np.cross(f, [0, 1, 0])
+            r /= np.linalg.norm(r)
+            p = (tris - eye) @ np.array([r, np.cross(r, f), -f]).T
+            z = -p[..., 2]
+            x, y = W / 2 + p[..., 0] / z * s, H / 2 - p[..., 1] / z * s
+            near, depth = np.full((H, W), -1), np.full((H, W), np.inf)
+            hits = []
+            for i in range(len(tris)):
+                (x0, x1, x2), (y0, y1, y2) = x[i], y[i]
+                area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
+                if area >= 0:
+                    continue
+                xa, xb = max(0, int(min(x[i]))), min(W - 1, int(max(x[i])) + 1)
+                ya, yb = max(0, int(min(y[i]))), min(H - 1, int(max(y[i])) + 1)
+                if xa > xb or ya > yb:
+                    continue
+                X, Y = np.meshgrid(np.arange(xa, xb + 1) + .5, np.arange(ya, yb + 1) + .5)
+                w0 = ((x1 - X) * (y2 - Y) - (x2 - X) * (y1 - Y)) / area
+                w1 = ((x2 - X) * (y0 - Y) - (x0 - X) * (y2 - Y)) / area
+                inside = (w0 >= 0) & (w1 >= 0) & (w0 + w1 <= 1)
+                if not inside.any():
+                    continue
+                d = (w0 * z[i, 0] + w1 * z[i, 1] + (1 - w0 - w1) * z[i, 2])[inside]
+                py, px = np.nonzero(inside)
+                py, px = py + ya, px + xa
+                hits.append((owner[i], py, px, d))
+                win = d < depth[py, px]
+                depth[py[win], px[win]] = d[win]
+                near[py[win], px[win]] = owner[i]
+            weight = 3.0 if abs(az) <= 90 else 1.0
+            for u, py, px, d in hits:
+                behind = d > depth[py, px] + tol
+                np.add.at(occ, (near[py[behind], px[behind]], u), weight)
+    np.fill_diagonal(occ, 0)
+    c = np.array([tris[owner == k].reshape(-1, 3).mean(0) for k in range(n)])
+    order = list(np.argsort(-np.hypot(c[:, 0] - at[0], c[:, 2] - at[2])))
+
+    def cost(o):
+        pos = np.empty(n, int)
+        pos[o] = np.arange(n)
+        return occ[pos[:, None] > pos[None, :]].sum()
+
+    best = cost(order)
+    for _ in range(rounds):
+        for v in list(order):
+            order.remove(v)
+            rest = np.array(order, int)
+            gain = np.concatenate([[0], np.cumsum(occ[v, rest])]) + np.concatenate([np.cumsum(occ[rest, v][::-1])[::-1], [0]])
+            order.insert(int(np.argmin(gain)), v)
+        now = cost(order)
+        if now >= best:
+            break
+        best = now
+    return order, best, occ.sum()
 
 
 def emit_shape(verts_list, use_restore, use_nrm, use_uv, use_col, slot_of, world, quads=False, scale=1):
@@ -1754,6 +1828,17 @@ def gltf_world(g, target):
         mtx = local @ mtx
         idx = parent.get(idx)
     return mtx
+
+
+def fog_model(path):
+    ir = parse_bmd(load_model(path))
+    for mt in ir['models'][0]['materials']:
+        if struct.unpack_from('<I', mt['raw'], 20)[0]:
+            raw = bytearray(mt['raw'])
+            struct.pack_into('<I', raw, 12, struct.unpack_from('<I', raw, 12)[0] | 1 << 15)
+            mt['raw'] = bytes(raw)
+    with open(path, 'wb') as f:
+        f.write(lz11_compress(build_bmd(ir)))
 
 
 def update_info(m):

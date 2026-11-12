@@ -1,7 +1,13 @@
 """Story-flag unlock conditions for Music Select themes, shop packs and CPU Duel opponents."""
 from pathlib import Path
 
-FLAG_RANGES = ((10000, 11279), (20000, 20249))
+STORY_FLAG_END = 15728
+FLAG_RANGES = ((10000, STORY_FLAG_END - 1), (20000, 20249))
+RANGES_TEXT = ', '.join(f'{lo}-{hi}' for lo, hi in FLAG_RANGES)
+
+
+def is_flag(n):
+    return any(lo <= n <= hi for lo, hi in FLAG_RANGES)
 
 
 def story_flags(spec_path):
@@ -24,9 +30,9 @@ def words(groups, flags, where):
     for g in groups:
         for name in g:
             n = flags.get(name, name) if isinstance(name, str) else name
-            if not isinstance(n, int) or not any(lo <= n <= hi for lo, hi in FLAG_RANGES):
+            if not isinstance(n, int) or not is_flag(n):
                 raise SystemExit(f'{where}: flag {name!r} is not in story/names.flags or a story flag number '
-                                 f'(10000-11279, 20000-20249)')
+                                 f'({RANGES_TEXT})')
             out.append(n)
         out.append(0)
     return out + [0]

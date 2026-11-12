@@ -6,10 +6,14 @@ import subprocess
 import sys
 import time
 
+from reaper import die_with_parent
+
 MAIN = 0x02000000
 MELON = os.environ.get('MELON', os.path.expanduser('~/tools/melonds/squashfs-root/AppRun'))
 MELON_CFG = os.environ.get('GYM_MELON_CFG', os.path.expanduser('~/tools/melonds/cfg_k'))
 MIN_STATE = 1 << 20
+THINK_BOX, THINK_MAGIC = 0x01fff520, 0x4b4e4854
+TICK_HZ = 33513982 / 64
 
 
 def main_ram(path):
@@ -28,14 +32,23 @@ def u32(ram, addr):
     return struct.unpack_from('<I', ram, addr - MAIN)[0]
 
 
-def ram_of(state):
+def section_of(state, name):
     p = 0x10
     while p < len(state) - 8:
         tag, ln = state[p:p + 4], struct.unpack_from('<I', state, p + 4)[0]
-        if tag == b'NDSG':
-            return p + 0x14
+        if tag == name:
+            return p
+        if not ln:
+            return None
         p += ln
-    raise ValueError('no NDSG section')
+    return None
+
+
+def ram_of(state):
+    p = section_of(state, b'NDSG')
+    if p is None:
+        raise ValueError('no NDSG section')
+    return p + 0x14
 
 
 class Ram:
@@ -52,6 +65,21 @@ class Ram:
     def block(self, a, n):
         return self.d[self.base + a - MAIN:self.base + a - MAIN + n]
 
+    def think_box(self):
+        o = section_of(self.d, b'CP15')
+        if o is None:
+            return None
+        box = struct.unpack_from('<5I', self.d, o + 0x1c + (THINK_BOX & 0x7fff))
+        return box[1:] if box[0] == THINK_MAGIC else None
+
+    def think_drops(self):
+        box = self.think_box()
+        return box and box[0]
+
+    def think_max_s(self):
+        box = self.think_box()
+        return box and [round(t / TICK_HZ, 2) for t in box[1:]]
+
 
 def symbols(work):
     syms = {}
@@ -67,6 +95,7 @@ def xvfb(screen='800x600x24'):
     r, w = os.pipe()
     p = subprocess.Popen(['Xvfb', '-displayfd', str(w), '-screen', '0', screen], pass_fds=(w,),
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    die_with_parent(p.pid)
     os.close(w)
     with os.fdopen(r) as f:
         return p, ':' + f.readline().strip()
@@ -78,6 +107,7 @@ class Melon:
         self.env = dict(os.environ, DISPLAY=self.display, XDG_CONFIG_HOME=cfg, SDL_AUDIODRIVER='dummy')
         self.proc = subprocess.Popen([MELON, rom], env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                      start_new_session=True)
+        die_with_parent(self.proc.pid)
         self.win = None
         for _ in range(100):
             time.sleep(0.1)

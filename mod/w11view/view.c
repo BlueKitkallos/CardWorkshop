@@ -56,6 +56,7 @@ extern u32 story_spectate;
 extern u32 inspect_paused;
 extern void inspect_input(void);
 extern void story_finish(void);
+extern void story_result(void);
 extern void inspect_reset(void);
 u32 vm_next_loop = 0;
 u32 vm_next_exit = 0;
@@ -226,6 +227,7 @@ static int vm_back(void)
 int vm_exit(void)
 {
     int r = ((int (*)(void))vm_next_exit)();
+    story_result();
     if (CALLBACK == DUEL_LAUNCH) {
         in_duel = 0;
         story_finish();

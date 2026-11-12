@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(1, os.path.dirname(HERE))
+import buildwarn
 import carddb
 import game
 import modspec
@@ -20,6 +21,7 @@ import nsbmd
 import nttx
 import w11textfix
 import w11unlock
+from point_rules import rom_points
 
 PK_FIRST = 97
 PK_MAX = 20
@@ -44,10 +46,12 @@ CUT_MIN = 8
 TITLE_BOX = (3, 103, 61, 112)
 SERIF = os.environ.get('YGO_TITLE_FONT', '/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf')
 KEY = 0x03e0
+COMMON_FILL = 48
 
 
 def load(paths):
     specs, ids = [], {}
+    points = rom_points()[0]
     for p in paths:
         with open(p, encoding='utf-8') as f:
             s = json.load(f)
@@ -61,8 +65,12 @@ def load(paths):
         ids[pid] = p
         for key in ('name', 'desc'):
             missing = [l for l in LANGS if not isinstance(s.get(key, {}).get(l), str) or not (stock or s[key][l])]
+            if 'e' in missing:
+                raise SystemExit(f'{p}: "{key}" has no English text')
             if missing:
-                raise SystemExit(f'{p}: "{key}" has no text for {", ".join(missing)} (languages {" ".join(LANGS)})')
+                buildwarn.warn(f'{p}: "{key}" has no text for {", ".join(missing)}; the English text is used')
+                for l in missing:
+                    s[key][l] = s[key]['e']
         if stock:
             try:
                 w11textfix.fix_pack_spec(s, p)
@@ -79,6 +87,11 @@ def load(paths):
             raise SystemExit(f'{p}: "cards" takes the rarities {", ".join(RARITY)}')
         if pid == ALL_RANDOM and cards:
             raise SystemExit(f'{p}: pack {ALL_RANDOM} takes every card; it has no "cards" list')
+        exclude = s.get('exclude', [])
+        if exclude and pid != ALL_RANDOM:
+            raise SystemExit(f'{p}: "exclude" belongs to pack {ALL_RANDOM} only')
+        if not isinstance(exclude, list) or not all(isinstance(n, str) for n in exclude):
+            raise SystemExit(f'{p}: "exclude" is a list of card names')
         if s.get("structure_deck"):
             if stock or not isinstance(s["structure_deck"], str):
                 raise SystemExit(f'{p}: "structure_deck" must name a deck JSON for an added pack')
@@ -92,10 +105,17 @@ def load(paths):
             if len(cards['common']) < 4:
                 raise SystemExit(f'{p}: {len(cards["common"])} commons; a pack holds 4 different commons, so at '
                                  'least 4')
+            if not stock and len(cards['common']) < COMMON_FILL:
+                buildwarn.warn(f'{p}: {len(cards["common"])} commons; an added booster holds at least {COMMON_FILL}')
+            priced = [n for n in cards['common'] if not stock and points.get(n, 0) >= 2]
+            if priced:
+                buildwarn.warn(f'{p}: at common with 2 or more points: {", ".join(priced)}')
         if 'unlock' in s:
             if stock:
                 raise SystemExit(f'{p}: a stock pack has no "unlock": WC2011 decides when it goes on sale')
             s['_unlock'] = w11unlock.words(s['unlock'], w11unlock.story_flags(p), p)
+        if 'shop_order' in s and not isinstance(s['shop_order'], int):
+            raise SystemExit(f'{p}: "shop_order" must be an integer')
         seen = {}
         for r in RARITY:
             for n in cards.get(r, []):
@@ -138,10 +158,12 @@ def resolve_all(index, specs):
                     unknown.append(str(e))
                     continue
                 rows.append((n, r, index.deck_id(ids)))
+        left = {r: sum(x[1] == r for x in rows) for r in s.get('cards', {})}
+        if any(left[r] < min(len(names), 4 if r == 'common' else 1) for r, names in s.get('cards', {}).items()):
+            raise SystemExit('\n'.join(unknown) + f'\n{p}: too few cards left in the game ({left})')
         out.append((p, s, rows))
-    if unknown:
-        raise SystemExit('\n'.join(unknown) + f'\n{len(unknown)} card name(s) not in the game (WC2011 cards and the '
-                                               'mod card specs)')
+    for u in unknown:
+        buildwarn.warn(f'{u}; left out of the pack')
     return out
 
 
@@ -218,8 +240,8 @@ def set_text(pt, db, specs):
                 if l == 'k':
                     miss = sorted({ch for ch in text if '가' <= ch <= '힣'} - glyphs)
                     if miss:
-                        raise SystemExit(f'{p}: {key} k: {"".join(miss)} never occurs in WC2011\'s Korean text '
-                                         '(the font may lack it)')
+                        buildwarn.warn(f'{p}: {key} k: {"".join(miss)} never occurs in WC2011\'s Korean text '
+                                       '(the font may lack it)')
                 store[pl][s['id']] = text
 
 
@@ -314,13 +336,23 @@ def cutout_layer(c, size, rim):
     fg = Image.open(c['image']).convert('RGBA')
     if c.get('fade_edges', True):
         fg = fade_cut_edges(fg)
+    if c.get('rotate'):
+        fg = fg.rotate(c['rotate'], Image.BICUBIC, expand=True)
     fg = fg.crop(fg.getchannel('A').getbbox())
     if c.get('flip'):
         fg = fg.transpose(Image.FLIP_LEFT_RIGHT)
     s = c.get('height', 0.7) * h / fg.height
     fg = fg.resize((max(1, round(fg.width * s)), max(1, round(fg.height * s))), Image.LANCZOS)
+    if c.get('shadow'):
+        grey = np.asarray(fg.convert('L'), dtype=float)[..., None] / 255
+        tint = np.array(rim, dtype=float) * c['shadow']
+        rgb_ = Image.fromarray(np.clip(grey * tint, 0, 255).astype(np.uint8))
+        rgb_.putalpha(fg.getchannel('A'))
+        fg = rgb_
     layer = Image.new('RGBA', size, (0, 0, 0, 0))
     layer.paste(fg, (round(c.get('x', 0.5) * w - fg.width * c.get('anchor', 0.5)), round(c.get('y', 0.05) * h)), fg)
+    if c.get('shadow'):
+        return layer
     solid = layer.getchannel('A').point(lambda v: 255 if v > 60 else 0)
     glow = solid.filter(ImageFilter.MaxFilter(RIM_PX * 2 + 1)).filter(ImageFilter.GaussianBlur(RIM_PX))
     out = Image.new('RGBA', size, rim + (0,))
@@ -448,6 +480,11 @@ def extra_rows(db, specs):
     return sorted(set(rows), key=lambda row: row & 0xffffff)
 
 
+def random_exclude(index, specs):
+    return sorted({cid for p, s in specs for n in s.get('exclude', [])
+                   for cid in index.resolve(n, f'{p}: exclude')})
+
+
 def structure_deck(index, path):
     from ydc import Deck
     with open(path, encoding='utf-8') as f:
@@ -465,8 +502,9 @@ def deck_filename(pid):
     return f'mod_sd{pid}.ydc'
 
 
-def write_header(src, specs, extra=()):
-    rows = ''.join(f' \\\n    {{{s["id"]}, {s.get("price", PRICE)}}},' for _, s in specs)
+def write_header(src, specs, extra=(), exclude=()):
+    shop = sorted(specs, key=lambda x: (x[1].get('shop_order', 1 << 16), x[1]['id']))
+    rows = ''.join(f' \\\n    {{{s["id"]}, {s.get("price", PRICE)}}},' for _, s in shop)
     locks, words = [], []
     for _, spec in specs:
         if spec.get('_unlock'):
@@ -482,7 +520,8 @@ def write_header(src, specs, extra=()):
                 + '#define W11_PK_DECK_TABLE ' + ''.join('{%d, \"/deck/%s\"}, ' % (s['id'], deck_filename(s['id'])) for _, s in specs if s.get('structure_deck')) + '{0, 0}\n'
                 + f'#define W11_PK_EXTRA_COUNT {len(extra)}\n'
                 f'#define W11_PK_EXTRA_TABLE {EXTRA_MAGIC}, {len(extra)}'
-                + ''.join(f', {r}' for r in extra) + '\n')
+                + ''.join(f', {r}' for r in extra) + '\n'
+                + f'#define W11_PK_RANDOM_EXCLUDE {"".join(f"{i}, " for i in exclude)}0\n')
     with open(os.path.join(src, 'w11packs.asm'), 'w') as f:
         f.write(f'.definelabel W11_PK_FIRST, {PK_FIRST}\n.definelabel W11_PK_SLOT, {SLOT}\n'
                 f'.definelabel W11_PK_COUNT, {len(specs)}\n')
@@ -493,7 +532,7 @@ def build(rom, prof, db, paths, mod, src, work):
     added = [x for x in specs if x[1]['id'] >= PK_FIRST]
     changed = assign(db, specs)
     extra = extra_rows(db, specs)
-    write_header(src, added, extra)
+    write_header(src, added, extra, random_exclude(modspec.CardIndex(db), specs))
     deck_out = os.path.join(mod, 'pac', game.container_dir('Data_arc_pac/deck.pac'))
     for _, spec in added:
         if spec.get('structure_deck'):
@@ -677,7 +716,7 @@ def cmd_check(a):
         want = {r: set() for r in RARITY}
         for r, names in s.get('cards', {}).items():
             for n in names:
-                ids = index.resolve(n, f'{p}: {r}')
+                ids = index.resolve(index.by_lower.get(n.lower(), n), f'{p}: {r}')
                 want[r].add(next((i for i in ids if i in got[r]), index.deck_id(ids)))
         if pid == ALL_RANDOM:
             want = got

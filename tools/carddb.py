@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import functools
 import json
 import re
 import struct
@@ -453,14 +454,19 @@ def _sort_key(card, lang, by_reading=False):
         if by_reading:
             return (0, reading(card.names["r"]))
         return (card.kana, name.encode("cp932"))
-    return (0, "".join(ch for ch in unicodedata.normalize("NFKD", name)
-                       if not unicodedata.combining(ch)).casefold())
+    return (0, _fold(name))
+
+
+@functools.lru_cache(maxsize=None)
+def _fold(name):
+    return "".join(ch for ch in unicodedata.normalize("NFKD", name) if not unicodedata.combining(ch)).casefold()
 
 
 KANA_SKIP = set(" 　・－-「」『』＝=")
 KANA_WEST = {"¡": "!", "¿": "?", "æ": "a", "Æ": "A"}
 
 
+@functools.lru_cache(maxsize=None)
 def reading(ruby_name):
     """Hiragana reading of a Japanese name with $Rbase(reading) ruby."""
     s = unicodedata.normalize("NFKC", re.sub(r"\$R[^(]*\(([^)]*)\)", r"\1", ruby_name))

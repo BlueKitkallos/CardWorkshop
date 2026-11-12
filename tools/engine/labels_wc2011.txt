@@ -111,6 +111,7 @@
 0202345c spell_speed_of t arm9: (id) -> spell speed (Counter Trap 3)
 02204c7c resolve_field_spell t ov03: (ctx, arg) Field Spell activation resolve
 0202ac08 card_atk t arm9: (id) -> printed ATK (? = 0)
+0202ac28 card_def t arm9: (id) -> printed DEF (? = 0)
 021b104c gy_insert t ov03: (card*) executor: card into its owner's GY (zone_insert 0x021c0610 calls it at 0x021c08e2; ov05 simulations call it too)
 0219d320 duel_step t ov03: per-frame duel step; first call 0x0219af00 at 0x0219d350
 0219af00 duel_step_first t ov03: first function of the duel step chain
@@ -137,6 +138,7 @@
 021a3320 card_name_id t ov03: (player, slot) -> the id the field card's name counts as (Harpie Queen -> Harpie Lady, Proto-Cyber Dragon -> Cyber Dragon); variant trampoline
 021a36ec card_effect_id t ov03: (player, slot) -> the id whose effects the field card has (effect copies)
 021b021c effect_destroy_ok t ov03: (ctx, player, slot, a, protected value, b) -> 1 when the card can be destroyed by the effect of ctx, else the protected value; variant trampoline
+021b0950 leaves_banished t ov03: (player, slot) -> nonzero when this field card is removed from play instead of leaving the field (Dark Magician of Chaos, Exodius; tear_leave_banish answers its first slot_has_modifier call)
 021afd3c effect_target_check t ov03: (ctx, player, slot) -> 1 when ctx's effect can target the card; variant trampoline
 021af7a4 spell_immune t ov03: (player, slot) -> immunity bits against Spells (1 own, 2 opponent's); variant trampoline
 021afa20 trap_immune t ov03: (player, slot) -> immunity bits against Traps (1 own, 2 opponent's); variant trampoline
@@ -191,6 +193,7 @@
 021b20ac hand_level t ov03: (player, uid) effective Level for hand summon checks
 021a8b38 original_summon_counter t ov03: (ctx) stock summon-negating Counter Trap classification
 021b807c field_level t ov03: (player, monster slot, mode) effective Level on the field
+0202a584 original_pack_primary t arm9: (card id) slot 0 pack; 0 keeps the card out of All at Random
 0202a5c4 original_pack_member t arm9: (card id, slot) primary pack membership
 0202a540 original_pack_rarity t arm9: (card id, slot) rarity in a primary pack slot
 021d6e40 target_criteria t ov03: (ctx, player, slot, mask) stock target checker behind the 10-byte filter thunks; mask bits 1 own / 2 opponent's side, 4 face-up, 8 face-down, 0x10 Monster Zone, 0x40 any field slot, 0x400 targetable (effect_target_check), 0x20000 not the ctx card, 0x200000 a Monster Zone is free once it leaves

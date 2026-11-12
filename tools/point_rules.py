@@ -33,3 +33,9 @@ def story_free_cards(path, deck=None):
     """Copies by name that do not count toward the cap; None when the whole cap is waived."""
     entry = _entry(path, deck)
     return entry[1] if entry else None
+
+
+def rom_points(spec_path=ROOT / 'variants/retro-genesys/banlists/retro-genesys.json'):
+    spec = json.loads(Path(spec_path).read_text())
+    data = json.loads((ROOT / spec['points_file']).read_text())
+    return {**data['points'], **spec.get('rom_only_points', {})}, data.get('point_cap', 100)

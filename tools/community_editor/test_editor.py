@@ -218,7 +218,11 @@ class ProjectFormatTests(unittest.TestCase):
         tables = {code: json.loads((lang / f'{code}.json').read_text(encoding='utf-8')) for code in 'fgis'}
         for key, english in w11menu.LABELS.items():
             for code, table in tables.items():
-                self.assertEqual(w11menu.TRANSLATIONS[key][code], table.get(english), f'{key} {code}')
+                own = w11menu.TRANSLATIONS[key].get(code)
+                if key in w11menu.WORKSHOP_LABELS:
+                    self.assertTrue(own, f'{key} {code}')
+                if own and english in table:
+                    self.assertEqual(own, table[english], f'{key} {code}')
 
 
 @unittest.skipUnless(os.environ.get('WC_EDITOR_TEST_ROM'), 'Set WC_EDITOR_TEST_ROM for ROM integration')

@@ -79,6 +79,24 @@ prop_stock:
     .thumb_set card_is_valid, 0x02029e61
     .global zone_modified_id
     .thumb_set zone_modified_id, 0x021a1585
+#ifdef THINK_CAP_TICKS
+    .global cpu_end
+    .thumb_set cpu_end, 0x0226a381
+    .global cpu_ai_pop
+    .thumb_set cpu_ai_pop, 0x0238034d
+    .global cpu_hyp_pop
+    .thumb_set cpu_hyp_pop, 0x022dc62d
+    .global cpu_flag
+    .thumb_set cpu_flag, 0x0226969d
+    .global cpu_note
+    .thumb_set cpu_note, 0x02269615
+    .global cpu_act
+    .thumb_set cpu_act, 0x0224c4cd
+    .global cpu_pass
+    .thumb_set cpu_pass, 0x02269675
+    .global cpu_can_end
+    .thumb_set cpu_can_end, 0x0224cfdd
+#endif
 
     .global genre_hook
     .type genre_hook, %function

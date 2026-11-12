@@ -10,6 +10,7 @@ import ndspy.lz10
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(1, os.path.dirname(HERE))
+import buildwarn
 import bustup
 import carddb
 import game
@@ -35,6 +36,7 @@ JP_ART = [(DUEL_BU_PAC, 'bu129_r'), (DUEL_BU_PAC, 'bu129b_r'), (DUEL_BU_L_PAC, '
           (TALK_BU_PAC, 'npc129_bu01_l'), (TALK_BU_PAC, 'npc129_bu01_r'), (WEAR_PAC, 'f_wear08_l'), (WEAR_PAC, 'f_wear08_r')]
 JP_ART_EXTS = ('lznanr', 'lzncer', 'lzncgr', 'lznclr')
 PLAYER_MOTION_FIXES = {'mpa12.lznsbca': (27, 28)}
+EXTRA_FRAMES = ('fusion', 'synchro', 'xyz', 'link')
 YDC_HEADER = bytes.fromhex('01cccccc808f9947')
 
 STORY_CHARS = 0x12d
@@ -287,6 +289,7 @@ class Script:
         main = (struct.unpack_from('<h', self.d, 0x203)[0] + 0x205 - 0x200) & 0xffff
         if self.d[0x202] != 0xe8:
             raise SystemExit(f'{self.name}: entry does not call main')
+        self.main = main
         reg = self.stubs.get(4)
         if reg is None:
             raise SystemExit(f'{self.name}: no event registration stub')
@@ -377,10 +380,10 @@ def check_line(s, where):
         raise SystemExit(f'{where}: empty line')
     rows = s.split('\n')
     if len(rows) > 3:
-        raise SystemExit(f'{where}: {len(rows)} rows, the message box holds 3')
+        buildwarn.warn(f'{where}: {len(rows)} rows, the message box holds 3')
     for r in rows:
         if len(r) > 36:
-            raise SystemExit(f'{where}: row "{r}" is {len(r)} characters, the box holds about 36')
+            buildwarn.warn(f'{where}: row "{r}" is {len(r)} characters, the box holds about 36')
     try:
         s.encode('latin1')
     except UnicodeEncodeError:
@@ -501,15 +504,22 @@ def head_offset(body, face, rows=45, reach=12):
 
 def merge_colours(images, limit=255, fixed=frozenset()):
     from collections import Counter
+    import numpy as np
     pixels = [p[:3] for im in images for p in im.get_flattened_data() if p[3] >= 128]
     count = Counter(pixels)
     alive, target = set(count), {c: c for c in count}
     if len(alive & set(fixed)) > limit:
         raise ValueError(f'{len(alive & set(fixed))} colours must stay, over the {limit} of one palette')
     while len(alive) > limit:
+        cols = sorted(alive)
+        at = {c: i for i, c in enumerate(cols)}
+        arr = np.array(cols, dtype=np.int64)
+        dist = np.abs(arr[:, None] - arr[None]).sum(2)
+        np.fill_diagonal(dist, 1 << 30)
+        near = dist.argmin(1)
         best = None
         for c in alive - set(fixed):
-            d, o = min((sum(abs(x - y) for x, y in zip(c, o)), o) for o in alive if o != c)
+            d, o = int(dist[at[c], near[at[c]]]), cols[near[at[c]]]
             if best is None or count[c] * d < best[0]:
                 best = (count[c] * d, c, o)
         _, c, o = best
@@ -569,7 +579,10 @@ def recolor_rgba(a, rules, parts, origin_y=None, keep=None):
     masks['skin'] = alpha & hue_in(h, sk['hue']) & (light >= sk['min_light'])
     if 'outfit' in parts:
         o = rules['outfit']
-        m = masks['outfit'] = alpha & (sat > o['min_sat']) & hue_in(h, o['hue'])
+        m = alpha & (sat > o['min_sat']) & hue_in(h, o['hue']) & (light < o.get('max_light', 2))
+        if origin_y is not None and 'min_y' in o:
+            m[:max(0, origin_y + o['min_y'])] = False
+        masks['outfit'] = m
         set_hls(out, m, np.full_like(h, o['to_hue']), light * o['light'], sat * o['sat'])
     if 'hair' in parts:
         r = rules['hair']
@@ -702,6 +715,15 @@ def portrait_image(spec, where, size, flip=False):
     return out
 
 
+def native_frame(path, size, dx=0):
+    from PIL import Image
+    im = Image.open(path).convert('RGBA')
+    size = (max(size[0], (im.width + 31) // 32 * 32), size[1])
+    out = Image.new('RGBA', size, (0, 0, 0, 0))
+    out.paste(im, (int(dx), size[1] - im.height))
+    return out
+
+
 class Builder:
     def __init__(self, rom_path, out):
         self.rom_path = rom_path
@@ -711,9 +733,10 @@ class Builder:
         self.out = out
         self.files = stock(self.rom)
         self.changed = {}
-        self.tables = {'story': [], 'chara': [], 'free': [], 'deckname': [], 'charname': []}
+        self.tables = {'story': [], 'chara': [], 'free': [], 'deckname': [], 'charname': [], 'echo': []}
         self.free_rating = {}
         self.free_unlock = {}
+        self.release = False
         self.card_specs = []
         self.card_names = {}
         self.base_pac = None
@@ -799,6 +822,7 @@ class Builder:
             rom, prof, dbfiles = carddb.load_from_rom(self.rom_path)
             db = carddb.CardDB.load(dbfiles, prof)
             self._cards = {}
+            self._extra_ids = set()
             in_pack = set()
             for c in db.cards[1:]:
                 k = c.names['e'].lower()
@@ -808,11 +832,15 @@ class Builder:
                 self._cards.setdefault(k, c.id)
                 self._cards[f'id:{c.id}'] = c.id
                 self.card_names.setdefault(c.id, dict(c.names))
+                if db.frame_name(c).startswith(EXTRA_FRAMES):
+                    self._extra_ids.add(c.id)
             for path in self.card_specs:
                 with open(path, encoding='utf-8') as f:
                     for c in json.load(f).get('cards', []):
                         if c.get('source') != 'wc2011' and 'id' in c:
                             self._cards.setdefault(c['name'].lower(), int(c['id']))
+                            if str(c.get('frame', '')).startswith(EXTRA_FRAMES):
+                                self._extra_ids.add(int(c['id']))
                             self.card_names.setdefault(int(c['id']), dict(c.get('names') or {'e': c['name']}))
         return self._cards
 
@@ -829,6 +857,8 @@ class Builder:
                 cid = cards.get(name.lower())
                 if cid is None:
                     raise SystemExit(f'{path}: {sec} card "{name}" is not in the WC2011 card database')
+                if sec == 'main' and cid in self._extra_ids:
+                    raise SystemExit(f'{path}: main card "{name}" is an Extra Deck monster')
                 ids += [cid] * int(n)
             if len(ids) > cap:
                 raise SystemExit(f'{path}: {sec} has {len(ids)} cards, WC2011 holds {cap}')
@@ -971,11 +1001,15 @@ class Builder:
                 raise SystemExit(f'{where}: stats: 5 values 0-255')
             row[3:8] = [int(v) for v in stats]
         key = status.get('key_card')
+        if status.get('template_deck') is not None and not key:
+            buildwarn.warn(f'{where}: no key_card in status: a template deck\'s key card does not count; '
+                           'the template\'s is kept')
         if key:
             cid = self.cards().get(key.lower())
             if cid is None:
-                raise SystemExit(f'{where}: key card "{key}" is not in the WC2011 card database')
-            row[8] = cid
+                buildwarn.warn(f'{where}: key card "{key}" is not in the WC2011 card database; the template\'s is kept')
+            else:
+                row[8] = cid
         struct.pack_into('<HHB5BH', st, deck_no * 12, *row)
         self.put(BIN_PAC, 'enemystatus.bin', bytes(st))
 
@@ -998,13 +1032,13 @@ class Builder:
             for i, line in enumerate(src):
                 if isinstance(line, dict):
                     line = line.get('text')
-                if not isinstance(line, str):
+                if not isinstance(line, (str, bytes)):
                     raise SystemExit(f'{where}: talk.{lang}[{i}]: expected a string or an object with "text"')
                 try:
-                    raw = line.encode(TALK_ENC.get(lang, 'cp1252'))
+                    raw = line if isinstance(line, bytes) else line.encode(TALK_ENC.get(lang, 'cp1252'))
                 except UnicodeEncodeError:
                     raise SystemExit(f'{where}: talk.{lang}[{i}] does not encode as {TALK_ENC.get(lang, "cp1252")}')
-                if not raw or b'\0' in raw:
+                if not (raw or isinstance(line, bytes)) or b'\0' in raw:
                     raise SystemExit(f'{where}: talk.{lang}[{i}] is empty or holds a NUL')
                 m += raw + b'\0'
                 offs.append(len(m))
@@ -1017,6 +1051,19 @@ class Builder:
         if first > TALK_SET_MAX:
             raise SystemExit(f'{where}: talk set {first}: the status row holds sets 0-{TALK_SET_MAX}')
         return first
+
+    def talk_over_template(self, slots, template_deck, where):
+        talk1 = self.get(BIN_PAC, 'enemystatus.bin')[int(template_deck) * 12 + 4]
+        if not talk1:
+            raise SystemExit(f'{where}: template deck {template_deck} has no talk set')
+        first = TALK_GENERIC + (talk1 - 1) * TALK_SET_LINES
+        lines = {}
+        for lang in TALK_LANGS:
+            o, m = self.get(BIN_PAC, f'talkost_{lang}.bin'), self.get(BIN_PAC, f'talkmsg_{lang}.bin')
+            offs = struct.unpack(f'<{len(o) // 4}I', o)
+            lines[lang] = [w11lang.tr(slots[str(i)], lang, 'talk', {'at': where}) if str(i) in slots
+                           else m[offs[first + i]:].split(b'\0')[0] for i in range(TALK_SET_LINES)]
+        return self.talk_set(lines, where)
 
     def opponent(self, spec, base_dir):
         rp = lambda p: p if os.path.isabs(p) else os.path.normpath(os.path.join(base_dir, p))
@@ -1039,6 +1086,8 @@ class Builder:
         deck, _ = self.deck(rp(spec['deck']), where)
         self.deck_slot(spec.get('deck_file11', f'MOD{chara:03d}'), deck, deck_no)
         talk1 = self.talk_set(spec['talk'], where) + 1 if 'talk' in spec else None
+        if 'duel_talk' in spec:
+            talk1 = self.talk_over_template(spec['duel_talk'], opponent_status(spec)['template_deck'], where) + 1
         self.status_row(opponent_status(spec), deck_no, where, talk1, spec.get('stats'))
         name = spec.get('name') or self.card_names.get(cid, spec['card'])
         name_text = self.game_text([name, spec.get('deck_name') or name], {'at': where})
@@ -1047,8 +1096,9 @@ class Builder:
         self.tables['chara'].append((chara, deck_no))
         self.tables['free'].append((chara, 0x8000 if spec.get('turbo') else 0))
         self.free_rating[chara] = int(opponent_status(spec)['rating'])
-        if 'unlock' in spec:
-            self.free_unlock[chara] = w11unlock.words(spec['unlock'], w11unlock.story_flags(base_dir), where)
+        unlock = spec.get('release_unlock', spec.get('unlock')) if self.release else spec.get('unlock')
+        if unlock is not None:
+            self.free_unlock[chara] = w11unlock.words(unlock, w11unlock.story_flags(base_dir), where)
         p = dict(spec['portrait'])
         if 'bundle' in p:
             self.portrait_bundle(rp(p['bundle']), chara)
@@ -1058,6 +1108,17 @@ class Builder:
                 if k not in self.files[DUEL_BU_PAC]:
                     raise SystemExit(f'{where}: portrait wc2011 {p["wc2011"]}: no {k} in BustupR.pac')
                 self.put(DUEL_BU_PAC, f'bu{chara:03d}_r.lz{ext}', self.files[DUEL_BU_PAC][k])
+        elif 'duel_nitro' in p:
+            self.duel_from_nitro(rp(p['duel_nitro']), chara, where)
+        elif 'nitro' in p:
+            self.duel_composite(p['duel_composite'], self.nitro_raw(rp(p['nitro']), where), chara, where, spec.get('recolor'))
+        elif 'native' in p:
+            import w11portraits
+            d = self.files[DUEL_BU_PAC]
+            dt = tuple(nttx.lz_decompress(d[f'bu046_r.lz{e}']) for e in ('ncer', 'nanr', 'nclr'))
+            img = native_frame(rp(p['native']), (160, 192), p.get('dx', 0))
+            for ext, data in w11portraits.encode([img] * 5, (p.get('x', -96), -96), dt).items():
+                self.put(DUEL_BU_PAC, f'bu{chara:03d}_r.lz{ext}', lz11_literal(data))
         else:
             src = {'png': rp(p.get('png') or p['cutout']), 'crop': p.get('crop'), 'alpha_min': p.get('alpha_min', 128),
                    'dx': p.get('dx', 0)}
@@ -1132,6 +1193,29 @@ class Builder:
             self.put(DUEL_BU_PAC, f'bu{chara:03d}_r.lz{ext}', lz11_literal(data))
         print(f'{where}: duel portrait composite, head offsets {offsets}, pose shift {pose_dx}')
 
+    def duel_from_nitro(self, prefix, chara, where):
+        import w11gfx
+        import w11portraits
+        raw = {e: nttx.lz_decompress(v) for e, v in self.nitro_raw(prefix, where).items()}
+        ts, bpp4 = w11gfx.tiles(raw['ncgr'])
+        pal = w11gfx.palette(raw['nclr'])
+        n = struct.unpack_from('<H', raw['ncer'], bustup.section(raw['ncer'], b'KBEC') + 8)[0]
+        cells = [w11gfx.cell(ts, bpp4, pal, raw['ncer'], k) for k in range(n)]
+        boxes = [c.getbbox() for c in cells]
+        if n < 4 or not all(boxes):
+            raise SystemExit(f'{where}: portrait duel_nitro: {prefix} has {n} cells, 4 or 5 expected')
+        left = min(b[0] for b in boxes) + w11gfx.CELL_BOX[0]
+        right = max(b[2] for b in boxes) + w11gfx.CELL_BOX[0]
+        x = -96 - 32 * max(0, -(-(-96 - left) // 32))
+        w = max(160, 32 * -(-(right - x) // 32))
+        x0, y0 = x - w11gfx.CELL_BOX[0], -96 - w11gfx.CELL_BOX[1]
+        frames = [c.crop((x0, y0, x0 + w, y0 + 192)) for c in (cells + cells[:1])[:5]]
+        d = self.files[DUEL_BU_PAC]
+        template = tuple(nttx.lz_decompress(d[f'bu046_r.lz{e}']) for e in ('ncer', 'nanr', 'nclr'))
+        for ext, data in w11portraits.encode(frames, (x, -96), template).items():
+            self.put(DUEL_BU_PAC, f'bu{chara:03d}_r.lz{ext}', lz11_literal(data))
+        print(f'{where}: duel portrait from {os.path.basename(prefix)}, {n} cells, box x {x} width {w}')
+
     def recolor_talk(self, raw, rules, where):
         import w11gfx
         import w11portraits
@@ -1169,7 +1253,7 @@ class Builder:
                 stem = f'{outfit["stem"]}_bu01_{side[0]}'
                 for ext, data in files[side].items():
                     self.put(TALK_BU_PAC, f'{stem}.lz{ext}', lz11_literal(data))
-            for ext, data in files['duel'].items():
+            for ext, data in files.get('duel', {}).items():
                 self.put(DUEL_BU_PAC, f'bu{chara:03d}{outfit.get("suffix", "")}_r.lz{ext}', lz11_literal(data))
 
     def add_model(self, name, path, where):
@@ -1194,6 +1278,66 @@ class Builder:
             raise SystemExit(f'{where}: motion name {name} is a stock RPG3D motion')
         self.put(MODEL_PAC, f'{name}.lznsbca', packed)
 
+    def talk_from_stock(self, src, stem, where):
+        t = self.files[TALK_BU_PAC]
+        npc = next((f'npc{src:0{w}d}' for w in (3, 2) if f'npc{src:0{w}d}_bu01_r.lzncgr' in t), None)
+        if npc is None:
+            raise SystemExit(f'{where}: portrait wc2011 {src}: no talk portrait')
+        for ext in ('ncgr', 'ncer', 'nanr', 'nclr'):
+            r = t[f'{npc}_bu01_r.lz{ext}']
+            left = t.get(f'{npc}_bu01_l.lz{ext}')
+            if left is None:
+                left = r if ext != 'ncer' else lz11_literal(mirror_ncer(nttx.lz_decompress(r)))
+            self.put(TALK_BU_PAC, f'{stem}_bu01_r.lz{ext}', r)
+            self.put(TALK_BU_PAC, f'{stem}_bu01_l.lz{ext}', left)
+
+    def nitro_raw(self, prefix, where):
+        raw = {}
+        for ext in ('ncgr', 'ncer', 'nanr', 'nclr'):
+            if not os.path.isfile(f'{prefix}.lz{ext}'):
+                raise SystemExit(f'{where}: portrait nitro: {prefix}.lz{ext} not found')
+            raw[ext] = open(f'{prefix}.lz{ext}', 'rb').read()
+        return raw
+
+    def talk_from_nitro(self, spec, stem, rp, where):
+        raw = self.nitro_raw(rp(spec['portrait']['nitro']), where)
+        talk = self.recolor_talk(raw, spec['recolor'], where) if 'recolor' in spec else raw
+        if spec['portrait'].get('pose_aliases'):
+            talk = dict(talk)
+            talk['nanr'] = lz11_literal(alias_portrait_poses(
+                nttx.lz_decompress(talk['nanr']), spec['portrait']['pose_aliases']))
+        for ext in ('ncgr', 'ncer', 'nanr', 'nclr'):
+            self.put(TALK_BU_PAC, f'{stem}_bu01_r.lz{ext}', talk[ext])
+            left = talk[ext] if ext != 'ncer' else lz11_literal(mirror_ncer(nttx.lz_decompress(talk[ext])))
+            self.put(TALK_BU_PAC, f'{stem}_bu01_l.lz{ext}', left)
+        return raw
+
+    def talk_from_duel_bustup(self, spec, where):
+        import w11gfx
+        from PIL import Image
+        p = spec['portrait']
+        bu = int(p['duel_bustup'])
+        d = self.files[DUEL_BU_PAC]
+        name = next((f'bu{bu:0{w}d}_r' for w in (3, 2) if f'bu{bu:0{w}d}_r.lzncgr' in d), None)
+        if name is None:
+            raise SystemExit(f'{where}: portrait duel_bustup {bu}: no bu{bu:03d}_r in BustupR.pac')
+        raw = {e: nttx.lz_decompress(d[f'{name}.lz{e}']) for e in ('ncgr', 'ncer', 'nclr')}
+        im = w11gfx.cells(raw['ncgr'], raw['nclr'], raw['ncer'])[int(p.get('cell', 0))]
+        im = im.crop(im.getbbox())
+        img = Image.new('RGBA', (128, 192), (0, 0, 0, 0))
+        img.paste(im, ((128 - im.width) // 2 + int(p.get('dx', 0)), 192 - im.height), im)
+        return self.talk_single(img, spec)
+
+    def talk_single(self, img, spec):
+        from PIL import Image
+        stem = spec.get('file_stem') or f'npc{int(spec["chara"]):03d}'
+        tpl = spec.get('talk_bustup_template', 'npc206_bu01_r')
+        tt = tuple(nttx.lz_decompress(self.files[TALK_BU_PAC][f'{tpl}.lz{e}']) for e in ('ncer', 'nanr', 'nclr'))
+        for side, side_img in (('r', img), ('l', img.transpose(Image.FLIP_LEFT_RIGHT))):
+            for ext, data in bustup_files(side_img, (-side_img.width // 2, -96), tt).items():
+                self.put(TALK_BU_PAC, f'{stem}_bu01_{side}.lz{ext}', lz11_literal(data))
+        return img
+
     def cast_models(self, spec, base_dir):
         where = spec.get('name', spec.get('id', '?'))
         rp = lambda p: p if os.path.isabs(p) else os.path.normpath(os.path.join(base_dir, p))
@@ -1206,9 +1350,14 @@ class Builder:
         model = spec.get('model') or {}
         if model.get('recolor_from'):
             base = model['recolor_from'].split('/')[-1].replace('.nsbmd', '.lznsbmd').lower()
-            if base not in self.files[MODEL_PAC] or 'recolor' not in spec or not model.get('path'):
-                raise SystemExit(f'{where}: model.recolor_from needs a stock RPG3D model, model.path and recolor')
-            stock_model = game.container_files(self.rom, MODEL_PAC + '.pac')[base]
+            if 'recolor' not in spec or not model.get('path'):
+                raise SystemExit(f'{where}: model.recolor_from needs model.path and recolor')
+            if os.path.isfile(rp(model['recolor_from'])):
+                stock_model = open(rp(model['recolor_from']), 'rb').read()
+            elif base in self.files[MODEL_PAC]:
+                stock_model = game.container_files(self.rom, MODEL_PAC + '.pac')[base]
+            else:
+                raise SystemExit(f'{where}: model.recolor_from {model["recolor_from"]}: not a file and not a stock RPG3D model')
             data, report = recolor_model(nttx.lz_decompress(stock_model), spec['recolor'])
             os.makedirs(os.path.dirname(rp(model['path'])), exist_ok=True)
             with open(rp(model['path']), 'wb') as f:
@@ -1239,8 +1388,8 @@ class Builder:
             slot = int(spec['slot'])
             player = int(spec.get('player_slot', 0))
             flag = int(spec['flag'])
-            if not 10000 <= flag < 0x2c0f:
-                raise SystemExit(f'{where}: flag {flag} outside the story flag range 10000-11278')
+            if not w11unlock.is_flag(flag):
+                raise SystemExit(f'{where}: flag {flag} outside the story flag ranges {w11unlock.RANGES_TEXT}')
             if not 1 <= slot < 0x26:
                 raise SystemExit(f'{where}: slot {slot}: 1-37')
             talk = spec['talk']
@@ -1285,21 +1434,7 @@ class Builder:
         elif 'nitro' in (spec.get('portrait') or {}):
             import w11gfx
             from PIL import Image
-            prefix = rp(spec['portrait']['nitro'])
-            raw = {}
-            for ext in ('ncgr', 'ncer', 'nanr', 'nclr'):
-                if not os.path.isfile(f'{prefix}.lz{ext}'):
-                    raise SystemExit(f'{where}: portrait nitro: {prefix}.lz{ext} not found')
-                raw[ext] = open(f'{prefix}.lz{ext}', 'rb').read()
-            talk = self.recolor_talk(raw, spec['recolor'], where) if 'recolor' in spec else raw
-            if spec['portrait'].get('pose_aliases'):
-                talk = dict(talk)
-                talk['nanr'] = lz11_literal(alias_portrait_poses(
-                    nttx.lz_decompress(talk['nanr']), spec['portrait']['pose_aliases']))
-            for ext in ('ncgr', 'ncer', 'nanr', 'nclr'):
-                self.put(TALK_BU_PAC, f'{stem}_bu01_r.lz{ext}', talk[ext])
-                left = talk[ext] if ext != 'ncer' else lz11_literal(mirror_ncer(nttx.lz_decompress(talk[ext])))
-                self.put(TALK_BU_PAC, f'{stem}_bu01_l.lz{ext}', left)
+            raw = self.talk_from_nitro(spec, stem, rp, where)
             if 'duel_composite' in spec['portrait']:
                 self.duel_composite(spec['portrait']['duel_composite'], raw, chara, where, spec.get('recolor'))
             else:
@@ -1501,7 +1636,10 @@ class Builder:
         os.makedirs(src, exist_ok=True)
         count = max([STORY_CHARS - 1] + [s for s, _ in self.tables['story']]) + 1
         with open(os.path.join(src, 'w11npc_gen.asm'), 'w') as f:
-            f.write(f'.definelabel W11NPC_STORY_COUNT, {count:#x}\n')
+            f.write(f'.definelabel W11NPC_STORY_COUNT, {count:#x}\n'
+                    f'.definelabel STORY_FLAG_END, {w11unlock.STORY_FLAG_END}\n')
+        with open(os.path.join(src, 'w11npc_gen.h'), 'w') as f:
+            f.write(f'#define STORY_FLAG_END {w11unlock.STORY_FLAG_END}\n')
         with open(os.path.join(src, 'w11npc_gen.S'), 'w') as f:
             f.write('    .section .rodata\n    .balign 4\n')
             free = sorted(self.tables['free'], key=lambda r: self.free_rating.get(r[0], 0))
@@ -1519,6 +1657,9 @@ class Builder:
                 words += self.free_unlock.get(chara, [])
             for name, rows in (('w11npc_free_lock', lock), ('w11npc_lock_flags', words or [0])):
                 f.write(f'    .global {name}\n{name}:\n' + ''.join(f'    .hword {v:#x}\n' for v in rows))
+            echo = sorted(self.tables['echo'])
+            f.write('    .global w11npc_echo\nw11npc_echo:\n' + ''.join(f'    .hword {v:#x}\n' for v in echo or [0]) +
+                    f'    .balign 4\n    .global w11npc_echo_n\nw11npc_echo_n:\n    .word {len(echo)}\n')
             f.write('    .balign 4\n')
         with open(os.path.join(self.out, 'report.json'), 'w') as f:
             json.dump(report, f, indent=1)
@@ -1547,6 +1688,7 @@ def cmd_build(a):
     b = Builder(a.rom, a.out)
     b.card_specs = a.cards
     b.base_pac = a.base_pac
+    b.release = a.release
     report = []
     copies = []
     talk_sets = {}
@@ -1562,11 +1704,17 @@ def cmd_build(a):
             spec = json.load(f)
         if 'story_index' not in spec:
             added = b.cast_models(spec, os.path.dirname(os.path.abspath(path)))
+            if 'nitro' in spec.get('portrait', {}):
+                base = os.path.dirname(os.path.abspath(path))
+                b.talk_from_nitro(spec, spec['file_stem'], lambda p: os.path.normpath(os.path.join(base, p)), path)
+                added.append(f'{spec["file_stem"]}_bu01')
             if added:
-                print(f'{path}: {spec.get("id", "?")}: story cast only, models {", ".join(added)}')
+                print(f'{path}: {spec.get("id") or spec.get("name", "?")}: story cast only, models {", ".join(added)}')
             else:
                 print(f'{path}: {spec.get("id", "?")}: story cast only (stock model {spec["model"].get("file")}), nothing to build')
             continue
+        if spec.get('echo'):
+            b.tables['echo'].append(int(spec['story_index']))
         if spec.get('shared_opponent'):
             ref = os.path.normpath(os.path.join(os.path.dirname(path), spec['shared_opponent']))
             if os.path.abspath(ref) not in {os.path.abspath(x) for x in a.opponents}:
@@ -1586,6 +1734,17 @@ def cmd_build(a):
             if spec.get('portrait', {}).get('bundle'):
                 bundle = os.path.join(os.path.dirname(path), spec['portrait']['bundle'])
                 b.portrait_bundle(os.path.abspath(bundle), chara)
+            elif 'duel_bustup' in spec.get('portrait', {}):
+                b.talk_from_duel_bustup(spec, path)
+            elif 'nitro' in spec.get('portrait', {}):
+                base = os.path.dirname(os.path.abspath(path))
+                b.talk_from_nitro(spec, spec['file_stem'], lambda p: os.path.normpath(os.path.join(base, p)), path)
+            elif 'native' in spec.get('portrait', {}):
+                p = spec['portrait']
+                b.talk_single(native_frame(os.path.join(os.path.dirname(os.path.abspath(path)), p['native']),
+                                           (128, 192), p.get('dx', 0)), spec)
+            elif 'wc2011' in spec.get('portrait', {}):
+                b.talk_from_stock(int(spec['portrait']['wc2011']), spec['file_stem'], path)
             if not spec.get('duel_name'):
                 print(f'{path}: story duelist {story:#x} shares Free Duel character {chara}')
             continue
@@ -1663,6 +1822,8 @@ def main():
                    'player goes first (no janken)')
     p.add_argument('--translations', help='translation tables (<lang>.json) for names and talk; the lines they lack '
                    'go to <out>/translations-needed.json')
+    p.add_argument('--release', action='store_true', help='finished-mod build: an opponent\'s release_unlock replaces '
+                   'its unlock')
     p.set_defaults(fn=cmd_build)
     p = sub.add_parser('info', help='event handlers and syscall stubs of a map script')
     p.add_argument('rom')

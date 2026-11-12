@@ -23,6 +23,19 @@ LABELS = {
     'SHOP_DESC': 'Purchase booster packs or use a card password.',
     'LEGACY': 'Legacy Wi-Fi',
     'LEGACY_DESC': 'Open the original Wi-Fi communications menu.',
+    'RESET': 'Soft Reset Story Mode',
+    'RESET_ASK': 'Reset the story to chapter 0?\nYou will keep your cards and\ncontent unlocked.',
+    'RESET_CONFIRM': 'Your story progress will be\nerased. Reset anyway?',
+    'RESET_QUIZ': 'I understand you want to reset.\nPlease indicate the ATK of\nCeltic Guardian to confirm.',
+    'QUIZ_1200': '1200', 'QUIZ_1500': '1500', 'QUIZ_1400': '1400', 'QUIZ_1800': '1800',
+    'BONUS_KAIBA': 'Winning against Seto Kaiba',
+    'BONUS_KAIBA_UNKNOWN': 'Winning against ???',
+    'RATING_1000': 'Rating 1000 reached',
+    'RATING_1500': 'Rating 1500 reached',
+    'RATING_2000': 'Rating 2000 reached',
+    'RATING_2500': 'Rating 2500 reached',
+    'RATING_3000': 'Rating 3000 reached',
+    'RATING_3500': 'Rating 3500 reached',
 }
 TRANSLATIONS = {
     'SHOP': {'f': 'Magasin', 'g': 'Shop', 'i': 'Negozio', 's': 'Tienda'},
@@ -36,7 +49,33 @@ TRANSLATIONS = {
                     'g': 'Öffne das ursprüngliche Wi-Fi-Kommunikationsmenü.',
                     'i': 'Apri il menu originale delle comunicazioni Wi-Fi.',
                     's': 'Abre el menú original de comunicaciones Wi-Fi.'},
+    'RESET': {},
+    'RESET_ASK': {},
+    'RESET_CONFIRM': {},
+    'RESET_QUIZ': {},
+    'QUIZ_1200': {}, 'QUIZ_1500': {}, 'QUIZ_1400': {}, 'QUIZ_1800': {},
+    'BONUS_KAIBA': {'f': 'Victoire contre Seto Kaiba', 'g': 'Sieg gegen Seto Kaiba', 'i': 'Vittoria contro Seto Kaiba',
+                    's': 'Victoria contra Seto Kaiba'},
+    'BONUS_KAIBA_UNKNOWN': {'f': 'Victoire contre ???', 'g': 'Sieg gegen ???', 'i': 'Vittoria contro ???',
+                            's': 'Victoria contra ???'},
+    'RATING_1000': {'f': 'Évaluation 1000 atteinte', 'g': 'Bewertung 1000 erreicht', 'i': 'Valutazione 1000 raggiunta',
+                    's': 'Clasificación 1000 alcanzada'},
+    'RATING_1500': {'f': 'Évaluation 1500 atteinte', 'g': 'Bewertung 1500 erreicht', 'i': 'Valutazione 1500 raggiunta',
+                    's': 'Clasificación 1500 alcanzada'},
+    'RATING_2000': {'f': 'Évaluation 2000 atteinte', 'g': 'Bewertung 2000 erreicht', 'i': 'Valutazione 2000 raggiunta',
+                    's': 'Clasificación 2000 alcanzada'},
+    'RATING_2500': {'f': 'Évaluation 2500 atteinte', 'g': 'Bewertung 2500 erreicht', 'i': 'Valutazione 2500 raggiunta',
+                    's': 'Clasificación 2500 alcanzada'},
+    'RATING_3000': {'f': 'Évaluation 3000 atteinte', 'g': 'Bewertung 3000 erreicht', 'i': 'Valutazione 3000 raggiunta',
+                    's': 'Clasificación 3000 alcanzada'},
+    'RATING_3500': {'f': 'Évaluation 3500 atteinte', 'g': 'Bewertung 3500 erreicht', 'i': 'Valutazione 3500 raggiunta',
+                    's': 'Clasificación 3500 alcanzada'},
 }
+GAME_LABELS = ['SHOP', 'CARD_SHOP', 'SHOP_DESC', 'RESET', 'RESET_ASK', 'RESET_CONFIRM', 'RESET_QUIZ',
+               'QUIZ_1200', 'QUIZ_1500', 'QUIZ_1400', 'QUIZ_1800', 'BONUS_KAIBA',
+               'BONUS_KAIBA_UNKNOWN', 'RATING_1000', 'RATING_1500', 'RATING_2000', 'RATING_2500', 'RATING_3000',
+               'RATING_3500']
+WORKSHOP_LABELS = ['SHOP', 'CARD_SHOP', 'SHOP_DESC', 'LEGACY', 'LEGACY_DESC']
 
 
 def render(fs, stem, cell):
@@ -191,7 +230,7 @@ def assets(fs11):
 
 
 def label_texts():
-    return {k: {'e': v, **TRANSLATIONS[k]} for k, v in LABELS.items()}
+    return {k: {'e': LABELS[k], **TRANSLATIONS[k]} for k in WORKSHOP_LABELS}
 
 
 def build(target, variant, translations=None):
@@ -213,7 +252,7 @@ def build(target, variant, translations=None):
         paths = [text_out / f'game_{kind}_{lang}.bin' for kind in ['indx', 'text']]
         idx, text = [bytes(p.read_bytes() if p.exists() else fs[p.name]) for p in paths]
         prefix, strings = carddb.read_strtab(idx, text, 1, 0, lang)
-        values = [w11lang.tr(v, lang, 'menu', {'at': f'w11menu {k}'}) for k, v in LABELS.items()]
+        values = [w11lang.tr(LABELS[k], lang, 'menu', {'at': f'w11menu {k}'}) for k in GAME_LABELS]
         if lang == 'e':
             rerun = strings[-len(values):] == values
         if rerun:
@@ -222,7 +261,7 @@ def build(target, variant, translations=None):
         text, offs = carddb.build_strtab(prefix, strings + values, lang)
         idx = carddb.write_index([offs])
         carddb.read_strtab(idx, text, 1, 0, lang)
-        current = dict(zip(LABELS, range(start, start + len(LABELS))))
+        current = dict(zip(GAME_LABELS, range(start, start + len(GAME_LABELS))))
         if ids is None:
             ids = current
         assert ids == current, 'language string tables have different lengths'

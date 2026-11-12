@@ -30,8 +30,41 @@ def _align(n):
     return (n + 0x1ff) & ~0x1ff
 
 
+INDEX_SECTORS = 64
+POOL_MAX = 254
+BLOCK_ROOM = 0x200 - 4
+
+
+def index_sectors(names):
+    blocks, used = 1, 0
+    for nm in names:
+        size = 2 + len(nm.encode('latin1'))
+        if used + size > BLOCK_ROOM:
+            blocks, used = blocks + 1, 0
+        used += size
+    return blocks + (max(len(names), 1) + 62) // 63
+
+
+def tight_order(names):
+    bins = []
+    for nm in sorted(names, key=lambda x: -len(x.encode('latin1'))):
+        size = 2 + len(nm.encode('latin1'))
+        fit = [b for b in bins if b[0] + size <= BLOCK_ROOM]
+        if fit:
+            b = max(fit, key=lambda x: x[0])
+            b[0] += size
+            b[1].append(nm)
+        else:
+            bins.append([size, [nm]])
+    return [nm for _, group in bins for nm in group]
+
+
 def build(entries):
     names = list(entries)
+    if index_sectors(names) > INDEX_SECTORS:
+        packed = tight_order(names)
+        if index_sectors(packed) < index_sectors(names):
+            names = packed
     n = len(names)
     recs = [bytes([len(nm), name_hash(nm)]) + nm.encode('latin1') for nm in names]
     short_len = 3 + sum(map(len, recs)) + 1

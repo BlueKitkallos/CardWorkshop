@@ -3,7 +3,9 @@ import argparse
 import hashlib
 import json
 import os
+import struct
 import sys
+import zlib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -25,6 +27,27 @@ def load(code):
     if not path.exists():
         raise UnknownGame(f'no profile for game code {code!r} (known: {", ".join(known_codes())})')
     return json.loads(path.read_text(encoding='utf-8'))
+
+
+def keep_header_crc32(out, source):
+    """Set the reserved header word 0x16C of the ROM image `out` (bytearray) so its first 512 bytes have the CRC-32 of
+    `source`'s: cheat databases (usrcheat.dat) find a game by its game code and that value."""
+    head = bytearray(out[:0x200])
+    head[0x16c:0x170] = bytes(4)
+    base = zlib.crc32(head)
+    basis = {}
+    for i in range(32):
+        struct.pack_into('<I', head, 0x16c, 1 << i)
+        v, m = zlib.crc32(head) ^ base, 1 << i
+        while v and v.bit_length() in basis:
+            bv, bm = basis[v.bit_length()]
+            v, m = v ^ bv, m ^ bm
+        basis[v.bit_length()] = v, m
+    need, word = zlib.crc32(bytes(source[:0x200])) ^ base, 0
+    while need:
+        bv, bm = basis[need.bit_length()]
+        need, word = need ^ bv, word ^ bm
+    struct.pack_into('<I', out, 0x16c, word)
 
 
 def read_header(rom_path):

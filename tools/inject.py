@@ -2,16 +2,24 @@ import concurrent.futures
 import glob
 import re
 import os
+import pathlib
 import shutil
 import struct
 import subprocess
 import sys
 
+import ndspy._lzCommon
 import ndspy.code
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import buildwarn
 import cardword
+import pac
+import stepcache
+
+LZ = ndspy.code.codeCompression
+LZ.compress = stepcache.Items('code-lz', code=(LZ.__file__, ndspy._lzCommon.__file__)).cached(LZ.compress)
 
 CARDWORD_SITES = os.path.join(HERE, 'engine', 'cardword_sites.txt')
 CARDWORD_ALLOW = os.path.join(HERE, 'engine', 'cardword_allow.txt')
@@ -23,6 +31,8 @@ ARENA_LO_LITERAL = 0x020a6538
 CFLAGS = ['-mcpu=arm946e-s', '-mthumb', '-mthumb-interwork', '-Os', '-ffreestanding', '-nostdlib',
           '-fno-builtin', '-Wall', '-Werror']
 MENU_LIST = 'menu_overlay.txt'
+SOUND_INDEX = 'SOUND_INDEX'
+DUEL_ARCHIVE, DUEL_FILE = 'Data_arc_pac/bin2.pac', 'fx11.bin'
 
 
 def run(cmd, **kw):
@@ -59,10 +69,12 @@ def write_engine_ld(work, labels=os.path.join(HERE, 'engine', 'labels.txt')):
 
 
 class Options:
-    def __init__(self, lto=False, menu_base=None, menu_size=0, bss_windows=()):
+    def __init__(self, lto=False, menu_base=None, menu_size=0, bss_windows=(), code_spans=()):
         self.lto, self.menu_base, self.menu_size, self.menu_overlay = lto, menu_base, menu_size, None
         self.bss_windows, self.bss_layout, self.defines = list(bss_windows), None, []
         self.bank_layout = None
+        self.code_spans, self.span_layout = list(code_spans), None
+        self.defsyms = {}
 
 
 def menu_sources(src):
@@ -173,15 +185,65 @@ def pack_bss(sections, windows):
     return layout
 
 
-def readonly_sections(map_path, code_base):
+def readonly_sections(map_path, code_base, taken=()):
     """Collect resident const data and explicitly bankable function sections."""
     with open(map_path) as f:
         content = f.read()
     totals = {}
     for name, address, size in re.findall(r'^ (\.rodata\S*|\.text\.bank\S*|\.text\.tear_step_call|\.text\.tear_pick_best|\.text\.tear_reset_clear)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)', content, re.M):
-        if int(address, 16) >= code_base:
+        if int(address, 16) >= code_base and f'*({name})' not in taken:
             totals[name] = totals.get(name, 0) + int(size, 16)
     return [(name, size, 4) for name, size in totals.items() if size]
+
+
+def resident_sections(map_path, code_base):
+    """Input sections of the resident region as (linker pattern, size): LTO sections by name, others by file."""
+    with open(map_path) as f:
+        content = f.read()
+    totals = {}
+    for name, address, size, path, before in re.findall(
+            r'^ (\.(?:text|rodata|data)\S*)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+(\S.*?)[ \t]*\n'
+            r'(?:[ \t]+0x([0-9a-f]+) \(size before relaxing\)\n)?', content, re.M):
+        size = max(int(size, 16), int(before or '0', 16))
+        if int(address, 16) < code_base or not size or '.resident' in name:
+            continue
+        lib = re.fullmatch(r'.*/(lib\w+\.a)\((\S+\.o)\)', path)
+        if lib:
+            pat = f'*{lib.group(1)}:{lib.group(2)}({name})'
+        elif path.endswith('.lto.o') or '.ltrans' in path:
+            if name in ('.text', '.rodata', '.data'):
+                continue
+            pat = f'*({name})'
+        elif path.endswith('.o'):
+            pat = f'*/{os.path.basename(path)}({name})'
+        else:
+            continue
+        totals[pat] = totals.get(pat, 0) + size
+    return [(pat, (size + 3) & ~3) for pat, size in totals.items()]
+
+
+def pack_spans(sections, spans, reserve=128):
+    free = [lo for lo, _ in spans]
+    layout = [[] for _ in spans]
+    for pat, size in sorted(sections, key=lambda s: (-s[1], s[0])):
+        for i, (_, hi) in enumerate(spans):
+            if free[i] + size <= hi - reserve:
+                layout[i].append(pat)
+                free[i] += size
+                break
+    return layout
+
+
+def write_spans_ld(work, spans, layout):
+    with open(os.path.join(work, 'spans_mem.ld'), 'w') as f:
+        if spans and layout:
+            f.write('MEMORY\n{\n' + ''.join(f'  span{i} : ORIGIN = {lo:#x}, LENGTH = {hi - lo:#x}\n'
+                                             for i, (lo, hi) in enumerate(spans)) + '}\n')
+    with open(os.path.join(work, 'spans.ld'), 'w') as f:
+        for i, pats in enumerate(layout or []):
+            if pats:
+                f.write(f'  .span{i} {spans[i][0]:#x} : {{ __span{i}_start = .; {" ".join(pats)} . = ALIGN(4); '
+                        f'__span{i}_end = .; }} > span{i}\n')
 
 
 def pack_readonly(sections, windows, bss_sections, bss_layout, reserve=64):
@@ -263,8 +325,9 @@ def link_blob(work, built, code_base, opts):
     gcc = os.path.join(TOOLCHAIN, 'arm-none-eabi-gcc')
     elf = os.path.join(work, 'code.elf')
     write_menu_ld(work, menu_objs)
+    write_spans_ld(work, opts.code_spans, opts.span_layout)
     write_banks_ld(work, opts.bank_layout, opts.bss_windows)
-    flags = [*CFLAGS, f'-Wl,--defsym=CODE_BASE={code_base:#x}']
+    flags = [*CFLAGS, f'-Wl,--defsym=CODE_BASE={code_base:#x}', *(f'-Wl,--defsym={k}={v:#x}' for k, v in opts.defsyms.items())]
     if opts.bss_windows:
         flags += ['-fdata-sections', '-ffunction-sections']
     if menu_objs:
@@ -278,7 +341,12 @@ def link_blob(work, built, code_base, opts):
         run(cmd)
         bss_sections = probe_sections(elf)
         opts.bss_layout = pack_bss(bss_sections, opts.bss_windows)
-        rodata = readonly_sections(os.path.join(work, 'code.map'), code_base)
+        taken = set()
+        if opts.code_spans:
+            opts.span_layout = pack_spans(resident_sections(os.path.join(work, 'code.map'), code_base), opts.code_spans)
+            taken = {pat for pats in opts.span_layout for pat in pats}
+            write_spans_ld(work, opts.code_spans, opts.span_layout)
+        rodata = readonly_sections(os.path.join(work, 'code.map'), code_base, taken)
         opts.bank_layout = pack_readonly(rodata, opts.bss_windows, bss_sections, opts.bss_layout)
         write_banks_ld(work, opts.bank_layout, opts.bss_windows)
     write_bss_ld(work, opts.bss_windows, opts.bss_layout)
@@ -291,6 +359,7 @@ def link_blob(work, built, code_base, opts):
     objcopy = os.path.join(TOOLCHAIN, 'arm-none-eabi-objcopy')
     binf = os.path.join(work, 'code.bin')
     run([objcopy, '-O', 'binary', '-j', '.text', '-j', '.data', elf, binf])
+    run([objcopy, '-O', 'binary', '-j', '.fxfile', elf, os.path.join(work, 'fx.bin')])
     menu_blob = None
     if menu_objs:
         menu_bin = os.path.join(work, 'menu.bin')
@@ -309,7 +378,21 @@ def link_blob(work, built, code_base, opts):
             if start < lo or start + len(data) > hi:
                 raise SystemExit(f'initialized bank {i} exceeds reserved idle window after linker padding/veneers')
             banks.append((start, data))
-    return elf, binf, menu_blob, banks
+    spans = []
+    for stale in glob.glob(os.path.join(work, 'span*.bin')):
+        os.remove(stale)
+    for i, pats in enumerate(opts.span_layout or []):
+        if not pats:
+            continue
+        span_bin = os.path.join(work, f'span{i}.bin')
+        run([objcopy, '-O', 'binary', '-j', f'.span{i}', elf, span_bin])
+        with open(span_bin, 'rb') as f:
+            data = f.read()
+        lo, hi = opts.code_spans[i]
+        if len(data) > hi - lo:
+            raise SystemExit(f'code span {i} {lo:#x}-{hi:#x}: {len(data)} B linked, {hi - lo} B of room')
+        spans.append((lo, data))
+    return elf, binf, menu_blob, banks, spans
 
 
 def compile_blob(src, work, code_base=CODE_BASE, opts=None, built=None):
@@ -318,7 +401,7 @@ def compile_blob(src, work, code_base=CODE_BASE, opts=None, built=None):
     built = built or compile_objects(src, work, opts)
     if built is None:
         return None
-    elf, binf, menu_blob, banks = link_blob(work, built, code_base, opts)
+    elf, binf, menu_blob, banks, spans = link_blob(work, built, code_base, opts)
     syms = {}
     funcs = set()
     for line in run([os.path.join(TOOLCHAIN, 'arm-none-eabi-readelf'), '-sW', elf]).splitlines():
@@ -334,13 +417,21 @@ def compile_blob(src, work, code_base=CODE_BASE, opts=None, built=None):
     with open(binf, 'rb') as f:
         blob = f.read()
     bss = syms['__bss_end'] - syms['__bss_start']
-    return Blob(blob, bss, syms, funcs, built, menu_blob, banks)
+    return Blob(blob, bss, syms, funcs, built, menu_blob, banks, spans)
 
 
 class Blob:
-    def __init__(self, code, bss, syms, funcs, built, menu, banks=()):
+    def __init__(self, code, bss, syms, funcs, built, menu, banks=(), spans=()):
         self.code, self.bss, self.syms, self.funcs, self.built, self.menu = code, bss, syms, funcs, built, menu
-        self.banks = list(banks)
+        self.banks, self.spans = list(banks), list(spans)
+
+    def span_report(self, spans):
+        if not spans:
+            return ''
+        used = sum(len(data) for _, data in self.spans)
+        return (f'; code spans {used} B in the arm9 Wi-Fi code ('
+                + ', '.join(f'{sum(len(d) for a, d in self.spans if a == lo)} / {hi - lo} at {lo:#x}' for lo, hi in spans)
+                + f', {sum(hi - lo for lo, hi in spans) - used} B free)')
 
     def window_use(self):
         s, out, i = self.syms, [], 0
@@ -432,6 +523,37 @@ def armips_patch(rom, arm9, src, work, syms, funcs, widen=True):
     return changed
 
 
+def arena_hi(code):
+    """(address, start value) of the word a game with "arena_hi_patch" reads its arena top from."""
+    import game
+    inj = game.load(code)['injection']
+    return int(inj['arena_hi_literal'], 16), int(inj['arena_hi_patch']['top'], 16)
+
+
+def move_arena_hi(data, ram, code):
+    """Apply the profile's "arena_hi_patch" to the arm9 image: the game reads its arena top from "arena_hi_literal",
+    and the stock literal keeps its value for the loaders that look it up and lower it."""
+    import game
+    inj = game.load(code)['injection']
+    if 'arena_hi_patch' not in inj:
+        return
+    lit, top = arena_hi(code)
+    rows = [tuple(int(x, 16) for x in row) for row in inj['arena_hi_patch']['words']]
+    have = {at: struct.unpack_from('<I', data, at - ram)[0] for at, _, _ in rows}
+    if all(have[at] == old for at, old, _ in rows):
+        for at, _, new in rows:
+            struct.pack_into('<I', data, at - ram, new)
+        return
+    wrong = [at for at, _, new in rows if at != lit and have[at] != new]
+    if wrong or have[lit] > top:
+        raise SystemExit(f'{code}: the arena top code is neither stock nor patched '
+                         f'({", ".join(f"{at:#x} holds {have[at]:#x}" for at in wrong or [lit])}); '
+                         f'a ROM built before the arena top moved cannot be patched again, start from the clean ROM')
+
+
+EXTRA_DEFINES = []
+
+
 def injection(code, use_windows=True):
     import game
     prof = game.load(code)
@@ -445,10 +567,12 @@ def injection(code, use_windows=True):
     flag = inj.get('bss_windows_flag')
     on = use_windows and (flag is None or os.environ.get(flag, '1') != '0')
     windows = [tuple(int(x, 16) for x in w.split('-')) for w in inj.get('bss_windows', [])] if on else []
+    spans = [tuple(int(x, 16) for x in w.split('-')) for w in inj.get('code_spans', [])] if on else []
     opts = Options(inj.get('lto', False), int(menu['base'], 16) if menu else None, int(menu['size'], 16) if menu else 0,
-                   windows)
+                   windows, spans)
     if flag:
         opts.defines.append(f'-D{flag}={int(on)}')
+    opts.defines += EXTRA_DEFINES
     return (int(inj['code_base'], 16), lit, os.path.join(HERE, '..', inj['engine_labels']),
             inj.get('widen_card_words', False), opts)
 
@@ -468,18 +592,75 @@ def add_menu_overlay(rom, blob, opts):
     return f'; menu overlay {opts.menu_overlay}: {size} bytes + {bss} bss at {start:#x}'
 
 
+def sound_index_bytes(rom, src):
+    if not any(SOUND_INDEX in pathlib.Path(p).read_text() for p in glob.glob(os.path.join(src, '*.S')) + glob.glob(os.path.join(src, '*.asm'))):
+        return 0
+    sys.path.insert(0, os.path.join(HERE, 'wc2011'))
+    import w11sound
+    return (w11sound.index_size(rom.getFileByName(w11sound.SDAT_PATH), rom.getFileByName(w11sound.HED_PATH)) + 0xff) & ~0xff
+
+
+def add_duel_file(rom, work, code_base, inj_heap):
+    with open(os.path.join(work, 'fx.bin'), 'rb') as f:
+        data = f.read()
+    if not data:
+        return ''
+    fid = rom.filenames.idOf(DUEL_ARCHIVE)
+    entries = pac.files(rom.files[fid])
+    entries[DUEL_FILE] = data
+    rom.files[fid] = pac.build(entries)
+    worst = struct.unpack_from('<I', data)[0]
+    if inj_heap:
+        heap = code_base - int(inj_heap['lo'], 16)
+        if heap < inj_heap['need'] + worst + inj_heap['margin']:
+            raise SystemExit(f'duel heap {heap} B at {code_base:#x} is under the measured need {inj_heap["need"]} B + the largest '
+                             f'layer block {worst} B + the margin {inj_heap["margin"]} B: {inj_heap["need"] + worst + inj_heap["margin"] - heap} B '
+                             f'over ("duel_heap" in the game profile; docs/findings/effect-layer-design.md section 23)')
+    return f'; bin2/{DUEL_FILE} {len(data)} B, largest layer block {worst} B'
+
+
 def apply(rom, src, work, code_floor=None, windows=True):
     os.makedirs(work, exist_ok=True)
     import game
     code_base, arena, labels, widen, opts = injection(game.for_rom(rom)['game_code'], windows)
+    inj = game.load(game.for_rom(rom)['game_code'])['injection']
+    duel_heap = inj.get('duel_heap') if code_floor is None else None
     if code_floor is not None:
         if code_floor > code_base:
             raise SystemExit(f'--code-floor {code_floor:#x} is above the profile\'s code_base {code_base:#x}')
         code_base = code_floor
     if menu_sources(src) and opts.menu_base is None:
         raise SystemExit(f'{MENU_LIST}: this game profile has no "menu_overlay" region')
-    opts.menu_overlay = max(rom.loadArm9Overlays(), default=-1) + 1
+    opts.menu_overlay = len(rom.arm9OverlayTable) // 32
     write_engine_ld(work, labels)
+    arm9 = rom.loadArm9()
+    main = arm9.sections[0]
+    move_arena_hi(main.data, main.ramAddress, game.for_rom(rom)['game_code'])
+    index = sound_index_bytes(rom, src)
+    under, index_note = 0, ''
+    if index:
+        room = tuple(int(x, 16) for x in inj['sound_index_room'].split('-')) if 'sound_index_room' in inj else None
+        if room and index <= room[1] - room[0]:
+            at = room[0]
+            index_note = f'; sound index {index} B at {at:#x} ({room[1] - room[0] - index} B left in the room up to {room[1]:#x})'
+        else:
+            if 'arena_hi_literal' not in arena:
+                raise SystemExit(f'{SOUND_INDEX}: {index} B does not fit "sound_index_room" and this game profile has no '
+                                 f'arena_hi_literal to put it under the arena top')
+            under = index
+            at = struct.unpack_from('<I', main.data, arena['arena_hi_literal'] - main.ramAddress)[0] - index
+            index_note = f'; sound index {index} B at {at:#x} under the arena top'
+            if room:
+                buildwarn.warn(f'{SOUND_INDEX}: {index - room[1] + room[0]} B over the {room[1] - room[0]}-byte '
+                               f'"sound_index_room" {room[0]:#x}-{room[1]:#x}, placed under the arena top; the duel '
+                               'heap pays for it')
+        opts.defsyms.update({SOUND_INDEX: at, f'{SOUND_INDEX}_SIZE': index})
+    floor = code_base
+    hints = stepcache.Items('inject-base', code=(__file__,))
+    hint_key = hints.key(os.path.abspath(work), floor, under, sorted(opts.defsyms.items()))
+    hint = hints.get(hint_key) if 'arena_hi_literal' in arena else None
+    if hint and int(hint) >= floor:
+        code_base = int(hint)
     built = compile_blob(src, work, code_base, opts)
     if built is None:
         if os.path.exists(os.path.join(src, 'hooks.asm')):
@@ -488,21 +669,20 @@ def apply(rom, src, work, code_floor=None, windows=True):
             rom.arm9 = arm9.save(compress=True)
             print(f'no code; patched {sorted(changed)}')
         return
-    arm9 = rom.loadArm9()
-    main = arm9.sections[0]
     if 'arena_hi_literal' in arena:
-        top = struct.unpack_from('<I', main.data, arena['arena_hi_literal'] - main.ramAddress)[0]
-        floor = code_base
+        top = struct.unpack_from('<I', main.data, arena['arena_hi_literal'] - main.ramAddress)[0] - under
         while True:
             base = (top - len(built.code) - built.bss) & ~0xff
             if base < floor:
                 raise SystemExit(f'code {len(built.code)} B + bss {built.bss} B = {len(built.code) + built.bss} B does not fit the '
-                                 f'{top - floor}-byte region {floor:#x}-{top:#x} below the arena top '
+                                 f'{top - floor}-byte region {floor:#x}-{top:#x} below the arena top'
+                                 f'{f" and the {under}-byte sound index" if under else ""} '
                                  f'({floor - base} B over; the region is "code_base" in the game profile)')
             if base == code_base:
                 break
             code_base = base
             built = compile_blob(src, work, code_base, opts, built.built)
+        hints.put(hint_key, str(code_base).encode())
     blob, bss = built.code, built.bss
     end = (code_base + len(blob) + bss + 0xff) & ~0xff
     if 'arena_lo_literal' in arena:
@@ -511,23 +691,30 @@ def apply(rom, src, work, code_floor=None, windows=True):
         if old_lo != code_base:
             raise SystemExit(f'arena literal is {old_lo:#x}, expected {code_base:#x}')
         struct.pack_into('<I', main.data, lit, end)
-        moved = f'arena lo -> {end:#x}'
+        moved = f'arena lo -> {end:#x}{index_note}'
     else:
         lit = arena['arena_hi_literal'] - main.ramAddress
         old_hi = struct.unpack_from('<I', main.data, lit)[0]
-        if end > old_hi:
-            raise SystemExit(f'code + bss end at {end:#x}, past the arena top {old_hi:#x}: '
-                             f'{end - old_hi} bytes over the {old_hi - code_base}-byte reserve')
+        if end > old_hi - under:
+            raise SystemExit(f'code + bss end at {end:#x}, past {old_hi - under:#x}: '
+                             f'{end - old_hi + under} bytes over the {old_hi - under - code_base}-byte reserve')
         struct.pack_into('<I', main.data, lit, code_base)
         moved = (f'arena hi {old_hi:#x} -> {code_base:#x} (reserve sized from the code, {code_base - floor} B '
-                 f'left in the region down to {floor:#x})')
+                 f'left in the region down to {floor:#x}){index_note}')
     if built.menu is not None:
         moved += add_menu_overlay(rom, built, opts)
+    moved += add_duel_file(rom, work, code_base, duel_heap)
     arm9.sections.append(code_section(blob, code_base, bss))
+    for address, data in built.spans:
+        at = address - main.ramAddress
+        if at < 0 or at + len(data) > len(main.data):
+            raise SystemExit(f'code span {address:#x} (+{len(data)} B) is outside the arm9 static image')
+        main.data[at:at + len(data)] = data
     add_initialized_banks(arm9, built.banks)
     changed = armips_patch(rom, arm9, src, work, built.syms, built.funcs, widen)
     rom.arm9 = arm9.save(compress=True)
-    print(f'code: {len(blob)} bytes + {bss} bss at {code_base:#x}, {moved}{built.window_report(opts.bss_windows)}; '
+    print(f'code: {len(blob)} bytes + {bss} bss at {code_base:#x}, {moved}{built.span_report(opts.code_spans)}'
+          f'{built.window_report(opts.bss_windows)}; '
           f'initialized banks {sum(len(data) for _, data in built.banks)} B; patched {sorted(changed)}')
 
 
@@ -557,7 +744,8 @@ def main():
     if built.menu is not None:
         start, size, bss = built.menu_layout()
         menu = f'; menu overlay {size} bytes + {bss} bss at {start:#x}'
-    print(f'code: {len(built.code)} bytes + {built.bss} bss at {code_base:#x}{menu}{built.window_report(opts.bss_windows)} '
+    print(f'code: {len(built.code)} bytes + {built.bss} bss at {code_base:#x}{menu}{built.span_report(opts.code_spans)}'
+          f'{built.window_report(opts.bss_windows)} '
           f'; initialized banks {sum(len(data) for _, data in built.banks)} B ({a.work}/code.elf, code.map)')
 
 

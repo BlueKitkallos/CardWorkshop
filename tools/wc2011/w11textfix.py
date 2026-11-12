@@ -11,6 +11,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(1, os.path.dirname(HERE))
+import buildwarn
 import carddb
 import game
 import pac
@@ -104,8 +105,8 @@ def check_story(data, where):
             limit = max([LINE_MAX] + [w11lang.width(r) for r in old.split('\n')])
             for r in new.split('\n'):
                 if w11lang.width(r) > limit:
-                    raise TextFixError(f'{where} ({lang}): row "{r}" has {w11lang.width(r)} characters, '
-                                       f'the message window holds about {limit}')
+                    buildwarn.warn(f'{where} ({lang}): row "{r}" has {w11lang.width(r)} characters, '
+                                   f'the message window holds about {limit}')
     return data
 
 

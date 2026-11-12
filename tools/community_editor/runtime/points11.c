@@ -262,8 +262,8 @@ const char *bl11_text_table(u32 id, const u8 *st)
 #define TOTAL_ROWS 2
 #define PAL_TEXT 1
 #define PAL_RED 4
-#define PAL_YELLOW 10
-#define FILL_YELLOW 0xe
+#define PAL_YELLOW 2
+#define FILL_YELLOW 0xc
 #define CARD_DX (-1)
 #define CARD_DY (-1)
 #define CARD_W 21

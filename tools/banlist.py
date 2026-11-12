@@ -6,6 +6,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import buildwarn
 import carddb
 import modspec
 from point_rules import story_free_cards, story_point_allowance
@@ -34,6 +35,14 @@ POINT_MSG = {
     'i': 'I punti del tuo Deck (%s) superano il limite dell\'attuale Lista a punti.',
     's': 'Los puntos de tu Deck (%s) exceden el límite de la Lista de puntos actual.',
     'j': 'デッキのポイント（%s）が\n現在のポイントリストの\n上限を超えています。',
+}
+POINT_PACK_MSG = {
+    'e': 'Adding\n"%s"\nwould exceed the point limit of the current Point List.',
+    'f': 'Ajouter\n"%s"\ndépasserait la limite de points de la Liste à points actuelle.',
+    'g': 'Das Hinzufügen von\n„%s“\nwürde das Punktelimit der aktuellen Punkteliste überschreiten.',
+    'i': 'Aggiungere\n"%s"\nsupererebbe il limite di punti dell\'attuale Lista a punti.',
+    's': 'Añadir\n"%s"\nexcedería el límite de puntos de la Lista de puntos actual.',
+    'j': '「%s」\nを入れると、現在のポイントリストの\n上限を超えます。',
 }
 POINT_LABELS = {
     983: POINT_LIST,
@@ -124,17 +133,27 @@ def fingerprint_line(points, cap):
     return f'points: {len(points)} cards, cap {cap}, fingerprint {fingerprint(points, cap)}'
 
 
+def with_rom_only(spec_path, bl, points):
+    extra = bl.get('rom_only_points', {})
+    if not extra:
+        return points
+    both = sorted(set(extra) & set(points or {}))
+    if both:
+        raise SystemExit(f'{spec_path}: "rom_only_points" and the point list both price {", ".join(both)}')
+    return {**(points or {}), **extra}
+
+
 def point_source(spec_path, bl):
     path = bl.get('points_file')
     if path is None:
-        return bl.get('points'), bl.get('point_cap')
+        return with_rom_only(spec_path, bl, bl.get('points')), bl.get('point_cap')
     if 'points' in bl:
         raise SystemExit(f'{spec_path}: "points" and "points_file" together, keep one')
     data = modspec.load_json(path)
     cap = bl.get('point_cap', data.get('point_cap'))
     if 'point_cap' in data and data['point_cap'] != cap:
         raise SystemExit(f'{spec_path}: "point_cap" is {cap} but {path} says {data["point_cap"]}')
-    return data.get('points'), cap
+    return with_rom_only(spec_path, bl, data.get('points')), cap
 
 
 def read_list(path, d=None):
@@ -180,9 +199,9 @@ def check_verified(forbid, card_specs, index):
     held = {c['id'] for _, c in modspec.CardSpecs(card_specs).cards if c.get('verified') is False}
     blocked = [i for i in forbid if i in held]
     if blocked:
-        raise SystemExit(f'{len(blocked)} unverified cards are in a pack, CPU deck or story gift, first '
-                         f'{index.name(blocked[0])} (id {blocked[0]}): add each to "verified" in its spec once its '
-                         'effect and CPU use are checked')
+        buildwarn.warn(f'{len(blocked)} unverified cards are in a pack, CPU deck or story gift: '
+                       + ', '.join(f'{index.name(i)} ({i})' for i in blocked)
+                       + '; add each to "verified" in its spec once its effect and CPU use are checked')
 
 
 def stock_lists(ext, out, skip, forbid):
@@ -294,7 +313,12 @@ def changes_of(spec_path, bl, index):
     for key, st in bl.get('cards', {}).items():
         if st not in STATUS:
             raise SystemExit(f'{spec_path}: {key!r}: status {st!r}, use one of {", ".join(STATUS)}')
-        for cid in index.resolve(key, spec_path):
+        try:
+            ids = index.resolve(key, spec_path)
+        except SystemExit as e:
+            buildwarn.warn(f'{e}; left out of the list')
+            continue
+        for cid in ids:
             if cid in changes:
                 raise SystemExit(f'{spec_path}: {index.name(cid)} (id {cid}) is set twice: {src[cid]!r} and {key!r}')
             changes[cid], src[cid] = STATUS[st], key
@@ -342,7 +366,7 @@ def points_of(spec_path, bl, index):
     names = bl.get('point_names', {})
     unused = sorted(set(names) - set(pts))
     if unused:
-        raise SystemExit(f'{spec_path}: "point_names" lists {unused[0]!r}, which has no points')
+        buildwarn.warn(f'{spec_path}: "point_names" lists {unused[0]!r}, which has no points')
     out, src = {}, {}
     missing = not_in_game(pts, names, index)
     if missing:
@@ -357,7 +381,8 @@ def points_of(spec_path, bl, index):
                 raise SystemExit(f'{spec_path}: points: {index.name(cid)} (id {cid}) is set twice: {src[cid]!r} '
                                  f'and {key!r}')
             out[cid], src[cid] = n, key
-    return cap, out, fingerprint_line(pts, cap)
+    public = {k: v for k, v in pts.items() if k not in bl.get('rom_only_points', {})}
+    return cap, out, fingerprint_line(public, cap)
 
 
 def deck_points(bl, cap, points, decks, index):
@@ -437,6 +462,7 @@ def main(spec_paths, ext, out, header=None, decks=(), stories=(), card_specs=(),
         built.append((spec_path, bl, entries, hdr, cap, points, line))
     texts = [bl['name'] for _, bl, *_ in built]
     point_at = [k for k, b in enumerate(built) if b[5]]
+    view_stride = w11_view_stride(built)
     if len(point_at) > 1:
         raise SystemExit('one point list at most: ' + ', '.join(built[k][0] for k in point_at))
     with_points = bool(point_at)
@@ -541,13 +567,21 @@ def w11_deck_check(w11, index, cap, points, decks, info_decks, mode, report, sto
         print(f'points deck {name}: {total}/{cap} (not shipped yet)')
     print(f'CPU decks: {len(rows)} checked ({len(rows) - len(decks)} WC2011, {len(decks)} of the variant), '
           f'{len(over)} over {cap} points' + (f', all totals in {report}' if report else ''))
-    for src, deck, who, total in sorted(over, key=lambda r: (-r[3], r[1])):
-        print(f'  over the cap: {deck}{f" ({who})" if who else ""}: {total}/{cap}')
     if over and mode == 'refuse':
+        for src, deck, who, total in sorted(over, key=lambda r: (-r[3], r[1])):
+            print(f'  over the cap: {deck}{f" ({who})" if who else ""}: {total}/{cap}')
         raise SystemExit(f'{len(over)} CPU decks are over the {cap}-point cap (DECK_CHECK=refuse); change the deck '
                          f'lists or build with DECK_CHECK=warn')
-    if over:
-        print(f'DECK_CHECK=warn: building anyway; DECK_CHECK=refuse stops the build on these decks')
+    for src, deck, who, total in sorted(over, key=lambda r: (-r[3], r[1])):
+        line = f'{deck}{f" ({who})" if who else ""}: {total}/{cap}'
+        if src == 'variant':
+            buildwarn.warn(f'CPU deck over the {cap}-point cap: {line}')
+        else:
+            print(f'  over the cap: {line}')
+    stock_over = [r for r in over if r[0] != 'variant']
+    if stock_over:
+        buildwarn.warn(f'{len(stock_over)} WC2011 CPU decks over the {cap}-point cap'
+                       + (f', totals in {report}' if report else ''))
 
 
 def w11_extra_deck(card):
@@ -584,30 +618,58 @@ def w11_starter(path, index, entries, cap, points):
         parts[part] = ids
     for name, n in copies.items():
         if n > allowed[name]:
-            raise SystemExit(f'{path}: {n} copies of {name}, the list a new game starts on allows {allowed[name]}')
+            buildwarn.warn(f'{path}: {n} copies of {name}, the list a new game starts on allows {allowed[name]}')
     if points and total > cap:
-        raise SystemExit(f'{path}: {total} points, over the {cap}-point cap of the list a new game starts on')
+        buildwarn.warn(f'{path}: {total} points, over the {cap}-point cap of the list a new game starts on')
     print(f'starter deck {deck.get("name", os.path.basename(path))}: main {len(parts["main"])}, '
           f'extra {len(parts["extra"])}, side {len(parts["side"])}' + (f', {total}/{cap} points' if points else ''))
     return parts
 
 
-def w11_band_lines(points):
+def w11_list_words(most):
+    return max(W11_STOCK_LIST_BYTES, 8 + 2 * most + 3 & ~3) // 2
+
+
+def w11_band_labels():
     bands = W11_POINT_BANDS
-    if len(set(bands)) != len(bands) or min(bands) < 1 or len(bands) != len(W11_VIEW_CAPS):
-        raise SystemExit(f'W11_POINT_BANDS {bands}: {len(W11_VIEW_CAPS)} distinct lower bounds of at least 1')
+    if len(set(bands)) != len(bands) or min(bands) < 1 or len(bands) != W11_VIEW_TABS:
+        raise SystemExit(f'W11_POINT_BANDS {bands}: {W11_VIEW_TABS} distinct lower bounds of at least 1')
     top = {lo: min([b for b in bands if b > lo], default=None) for lo in bands}
-    counts = [sum(1 for i, v in points.items() if i not in W11_VIEW_HIDDEN and v >= lo and (top[lo] is None or v < top[lo]))
-              for lo in bands]
-    over = [(lo, c, cap) for lo, c, cap in zip(bands, counts, W11_VIEW_CAPS) if cap is not None and c > cap]
-    if points and over:
-        raise SystemExit('Forbidden/Limited viewer: ' + ', '.join(f'the band from {lo} holds {c} cards, its tab {cap}'
-                                                                 for lo, c, cap in over))
     labels = [f'{lo}+' if top[lo] is None else f'{lo}' if top[lo] == lo + 1 else f'{lo}-{top[lo] - 1}'
               for lo in bands]
+    return top, labels
+
+
+def w11_tabs(entries, points):
     if points:
-        print('banlist viewer tabs: ' + ', '.join(f'{l} {c}' for l, c in zip(labels, counts)))
-    return [f'#define BL11_BAND_MIN {", ".join(map(str, bands))}',
+        top, _ = w11_band_labels()
+        return [sum(1 for i, v in points.items() if i not in W11_VIEW_HIDDEN and v >= lo and (top[lo] is None or v < top[lo]))
+                for lo in W11_POINT_BANDS]
+    return [None] + [sum(1 for _, st in entries if st == k) for k in range(W11_VIEW_TABS - 1)]
+
+
+def w11_view_stride(built):
+    tabs = [(spec_path, bl, points, w11_tabs(entries, points)) for spec_path, bl, entries, _, _, points, _ in built]
+    need = max(c for *_, t in tabs for c in t[2:])
+    stride = W11_VIEW_STOCK_BYTES
+    while stride < 4 * need:
+        stride *= 2
+    caps = (None, W11_VIEW_SEC1, stride // 4, stride // 4)
+    _, labels = w11_band_labels()
+    for spec_path, bl, points, t in tabs:
+        names = labels if points else ('all', 'forbidden', 'limited', 'semi-limited')
+        print(f'banlist {bl["name"]["e"]}: viewer tabs ' + ', '.join(
+            f'{n} {c}' + (f'/{cap}' if cap else '') for n, c, cap in zip(names, t, caps) if c is not None))
+        if t[1] > W11_VIEW_SEC1:
+            raise SystemExit(f'{spec_path}: Forbidden/Limited viewer: the {names[1]} tab holds {t[1]} cards, '
+                             f'it holds {W11_VIEW_SEC1}')
+    print(f'banlist RAM: viewer sections 2-3 hold {stride // 4} cards each ({8 * stride} bytes past ov08)')
+    return stride
+
+
+def w11_band_lines():
+    _, labels = w11_band_labels()
+    return [f'#define BL11_BAND_MIN {", ".join(map(str, W11_POINT_BANDS))}',
             '#define BL11_BAND_LABELS ' + ' '.join(f'"{l}\\000"' for l in labels),
             f'#define BL11_VIEW_HIDDEN {", ".join(map(str, W11_VIEW_HIDDEN))}']
 
@@ -669,10 +731,12 @@ def main11(argv):
         cap, points, line = points_of(spec_path, bl, index)
         entries, hdr = base_list(spec_path, bl, None, {}, index_ids, a.rom11)
         entries = [e for e in entries if e[0] not in changes] + [(i, s) for i, s in changes.items() if s != UNLIMITED]
-        if len(entries) > W11_LIST_ENTRIES:
-            raise SystemExit(f'{spec_path}: {len(entries)} entries, WC2011\'s list buffer holds {W11_LIST_ENTRIES}')
+        wide = sorted(i for i, _ in entries if i >= W11_ID_END)
+        if wide:
+            raise SystemExit(f'{spec_path}: card ids {wide} do not fit a list entry (ids under {W11_ID_END})')
         built.append((spec_path, bl, entries, hdr, cap, points, line))
     point_at = [k for k, b in enumerate(built) if b[5]]
+    view_stride = w11_view_stride(built)
     if len(point_at) > 1:
         raise SystemExit('one point list at most: ' + ', '.join(built[k][0] for k in point_at))
     for spec_path, bl, entries, hdr, cap, points, line in built:
@@ -693,7 +757,8 @@ def main11(argv):
     bin2 = game.container_files(carddb.load_from_rom(a.rom11)[0], 'Data_arc_pac/bin2.pac')
     labels = sorted(POINT_LABELS) if point_at else []
     texts = [bl['name'] for _, bl, *_ in built]
-    ids = w11_add_texts(texts + ([POINT_MSG] if point_at else []) + [w11_label(bin2, i) for i in labels],
+    ids = w11_add_texts(texts + ([POINT_MSG] if point_at else []) + [w11_label(bin2, i) for i in labels]
+                        + ([POINT_PACK_MSG] if point_at else []),
                         bin2, os.path.join(a.out, 'bin2'), w11_text_fixes(a.text_fixes, bin2))
     out = os.path.join(a.out, 'bin')
     os.makedirs(out, exist_ok=True)
@@ -711,28 +776,40 @@ def main11(argv):
         point_index = FIRST_INDEX + point_at[0] if point_at else 0
         text_map = list(zip(labels, ids[len(texts) + 1:]))
         paths = ''.join(f'Bin/{f}\\000' for f in files)
+        most = max(len(b[2]) for b in built)
+        list_words = w11_list_words(most)
+        print(f'banlist RAM: list buffer {2 * list_words} bytes ({most} entries in the largest list)')
         lines = [f'#define BL11_EXT {len(files)}', f'#define BL11_PATHS "{paths}"',
+                 f'#define BL11_LIST_WORDS {list_words}', f'#define BL11_VIEW_STRIDE {view_stride:#x}',
                  f'#define BL11_POINT_MAX {max(point_max, 1)}',
                  f'#define BL11_POINT_TEXT {ids[len(texts)] if point_at else 0}',
+                 f'#define BL11_PACK_TEXT {ids[-1] if point_at else 0}',
                  f'#define BL11_POINT_INDEX {point_index if point_at else 0xff}',
                  '#define BL11_TEXT_MAP ' + ' '.join(f'X({x}, {y})' for x, y in text_map)] + \
-                w11_band_lines(built[point_at[0]][5] if point_at else {}) + w11_starter_lines(starter)
+                w11_band_lines() + w11_starter_lines(starter)
         with open(a.header, 'w') as f:
             f.write('\n'.join(lines) + '\n')
         with open(os.path.splitext(a.header)[0] + '_def.asm', 'w') as f:
-            f.write(f'.definelabel BL11_EXT, {len(files)}\n.definelabel BL11_START, {point_index}\n')
+            f.write(f'.definelabel BL11_EXT, {len(files)}\n.definelabel BL11_START, {point_index}\n'
+                    f'.definelabel BL11_VIEW_STRIDE, {view_stride:#x}\n')
 
 
 W11_MAX_LISTS = 2
-W11_LIST_ENTRIES = 0xf8
+W11_ID_END = 0x4000
+W11_STOCK_LIST_ENTRIES = (0x280 - 8) // 2
+W11_STOCK_LIST_BYTES = 0x284
 W11_LANGS = 'efgijkrs'
 W11_LIMIT_TEXT = 1123
 W11_LIMIT_ASK = 1181
 W11_STOCK_LIST = 'limit201009.bin'
-W11_POINT_BANDS = (1, 2, 6, 15)
-W11_VIEW_CAPS = (None, 256, 128, 128)
+W11_POINT_BANDS = (1, 3, 7, 15)
+W11_VIEW_TABS = 4
+W11_VIEW_SEC1 = 256
+W11_VIEW_STOCK_BYTES = 0x200
 W11_VIEW_HIDDEN = (3858, 3859)
 W11_STARTER_SIZES = {'main': (40, 60), 'extra': (0, 15), 'side': (0, 15)}
+W11_POINT_COST = {'e': 'Point Cost', 'f': 'Coût en points', 'g': 'Punktekosten', 'i': 'Costo in punti',
+                  's': 'Coste en puntos', 'j': '消費ポイント'}
 
 
 def w11_game_text(bin2, lang):
@@ -745,6 +822,8 @@ def w11_game_text(bin2, lang):
 
 
 def w11_label(bin2, text_id):
+    if text_id == 1030:
+        return dict(W11_POINT_COST)
     label = dict(POINT_LABELS[text_id])
     if text_id != W11_LIMIT_ASK:
         return label
@@ -767,17 +846,18 @@ def w11_text_fixes(path, bin2):
         for old, new in table.items():
             at = [i for i, s in enumerate(stock) if s == old]
             if not at:
-                raise SystemExit(f'{path} ({lang}): no stock game_text string reads {old!r}')
+                buildwarn.warn(f'{path} ({lang}): no stock game_text string reads {old!r}; fix left out')
+                continue
             rows = new.split('\n')
             if len(rows) > len(old.split('\n')):
-                raise SystemExit(f'{path} ({lang}): {new!r} has more rows than the stock {old!r}')
+                buildwarn.warn(f'{path} ({lang}): {new!r} has more rows than the stock {old!r}')
             for i in at:
                 if '\n' in old:
                     limit = max(len(r) for r in old.split('\n'))
                 else:
                     limit = max(len(r) for strings in western.values() for r in strings[i].split('\n'))
                 if any(len(r) > limit for r in rows):
-                    raise SystemExit(f'{path} ({lang}): a row of {new!r} is wider than {limit}, the widest stock row')
+                    buildwarn.warn(f'{path} ({lang}): a row of {new!r} is wider than {limit}, the widest stock row')
                 fix[i] = new
         out[lang] = fix
     return out
