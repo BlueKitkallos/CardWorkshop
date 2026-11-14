@@ -16,7 +16,7 @@
 - **Project label** is the deck's name in the Workshop only. **Deck name in game** is the name players see.
 - **Free Duel CPUs** has a section for each list: CPU Duel, CPU Turbo Duel, CPU Tag Duel and CPU Tag Turbo Duel. Each one shows the base game CPUs first, then the ones you added.
 - You can change a base game CPU's name, portrait, deck, key card, rating and dialogue. Anything you leave alone stays as it is in the game. The dialogue starts from the CPU's own lines, so you only rewrite the ones you want. **Reset to base game** undoes all your changes to that CPU.
-- You can add up to 196 Free Duel CPUs. **+ New CPU** asks which list it goes in. Each one gets its own deck, a base game portrait, a key card, and a base game CPU whose dialogue and rating it starts with. They are unlocked from the start.
+- You can add up to 196 Free Duel CPUs in total, shared by the four lists. **+ New CPU** asks which list it goes in. Each one gets its own deck, a base game portrait, a key card, and a base game CPU whose dialogue and rating it starts with. They are unlocked from the start.
 - In CPU Tag Duel and CPU Tag Turbo Duel you pick a team, so an added tag CPU needs a **Partner** and a **Team name**. The partner can be any base game CPU or another CPU you added. Your own partner still comes from story mode.
 - **Copy base game CPU** copies a CPU from the game, with its own copy of the deck. The CPU uses the base game dialogue until you edit a line. Dialogue and rating are under **Dialogue & rating**. Up to 78 CPUs can have their own dialogue, and that counts base game CPUs whose lines you changed.
 

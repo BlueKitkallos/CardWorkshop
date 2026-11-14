@@ -24,7 +24,6 @@ to any other module then keeps the items.
 STEPCACHE=0 runs every command and skips every item lookup. STEPCACHE_DIR is the store (default build/cache/steps).
 """
 import atexit
-import fcntl
 import hashlib
 import json
 import os
@@ -37,6 +36,11 @@ import tempfile
 import time
 
 import buildwarn
+
+if os.name == 'nt':
+    import msvcrt
+else:
+    import fcntl
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STORE = os.path.abspath(os.environ.get('STEPCACHE_DIR') or os.path.join(ROOT, 'build', 'cache', 'steps'))
@@ -148,13 +152,26 @@ class Store:
     def __init__(self):
         for d in ('objects', 'steps', 'items', 'tmp'):
             os.makedirs(os.path.join(STORE, d), exist_ok=True)
-        self.lockf = open(os.path.join(STORE, 'lock'), 'a')
+        self.lockf = open(os.path.join(STORE, 'lock'), 'a+')
 
     def lock(self, exclusive=False):
-        fcntl.flock(self.lockf, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        if os.name != 'nt':
+            fcntl.flock(self.lockf, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            return
+        self.lockf.seek(0)
+        while True:
+            try:
+                msvcrt.locking(self.lockf.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                time.sleep(0.05)
 
     def unlock(self):
-        fcntl.flock(self.lockf, fcntl.LOCK_UN)
+        if os.name != 'nt':
+            fcntl.flock(self.lockf, fcntl.LOCK_UN)
+            return
+        self.lockf.seek(0)
+        msvcrt.locking(self.lockf.fileno(), msvcrt.LK_UNLCK, 1)
 
     def obj(self, sha):
         return os.path.join(STORE, 'objects', sha[:2], sha)

@@ -64,6 +64,41 @@ def parse_oams(ncer, cell=None):
     return oams
 
 
+def cell_x(ncer, cell):
+    return min(x for x, *_ in parse_oams(ncer, cell))
+
+
+def shift_cell(ncer, dst, src, dx):
+    p = section(ncer, b'KBEC')
+    size = struct.unpack_from('<I', ncer, p + 4)[0]
+    ncells, bank_attr, cell_off = struct.unpack_from('<HHI', ncer, p + 8)
+    if bank_attr != 0:
+        raise ValueError('cells with bounding boxes are not supported')
+    table = p + 8 + cell_off
+    base = table + 8 * ncells
+    cells = []
+    for k in range(ncells):
+        noam, attr, off = struct.unpack_from('<HHI', ncer, table + 8 * k)
+        cells.append([attr, [list(struct.unpack_from('<HHH', ncer, base + off + 6 * i)) for i in range(noam)]])
+    oams = [o[:] for o in cells[src][1]]
+    for o in oams:
+        o[1] = o[1] & ~0x1ff | (o[1] + dx) & 0x1ff
+    lo = max(cells[dst][0] & 0x3f, (cells[src][0] & 0x3f) + abs(dx) // 4)
+    cells[dst] = [cells[dst][0] & ~0x3f | min(lo, 0x3f), oams]
+    head = bytearray(ncer[p + 8:table])
+    rows, data = bytearray(), bytearray()
+    for attr, cell in cells:
+        rows += struct.pack('<HHI', len(cell), attr, len(data))
+        for o in cell:
+            data += struct.pack('<HHH', *o)
+    body = head + rows + data
+    body += b'\0' * (-len(body) % 4)
+    kbec = b'KBEC' + struct.pack('<I', 8 + len(body)) + body
+    out = bytearray(ncer[:p] + kbec + ncer[p + size:])
+    struct.pack_into('<I', out, 8, len(out))
+    return bytes(out)
+
+
 def decode(ncgr, nclr, ncer, cell=None, box=BOX):
     pal = [rgb555(v) for v in struct.unpack_from('<256H', nclr, section(nclr, b'TTLP') + 0x18)]
     p = section(ncgr, b'RAHC')

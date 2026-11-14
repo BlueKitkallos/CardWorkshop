@@ -144,7 +144,9 @@ def session(image, syms, mode_name, out):
                      'member_charas': [g.call(DUELIST_CHARA, pair & 0xffff), g.call(DUELIST_CHARA, pair >> 16)],
                      'team_text_side1': text(g, TEAM_TEXT + 0x3a), 'sides': sides}
         g.resume(regs)
-        time.sleep(0.5)
+        time.sleep(2)
+        if idx is not None:
+            subprocess.run(['import', '-window', m.win, str(out / f'{mode_name}_added.png')], env=m.env, check=True)
         g.halt()
         g.detach()
     finally:

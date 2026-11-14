@@ -3,6 +3,8 @@ import shutil
 import struct
 from pathlib import Path
 
+import bustup
+import nttx
 import w11packs
 from model import merged_talk
 import w11npc
@@ -77,6 +79,7 @@ def prepare(folder, adapter, p, extra):
             report.append(builder.opponent(spec, str(folder)))
             if o.get('tag'):
                 builder.tables['free'].pop()
+                tag_list_cell(builder, o['chara'], TAG_FIRST_MEMBER_DX)
         report += base_overrides(builder, adapter, p, decks)
         teams = tag_teams(builder, adapter, p)
         # Do not apply Dimension Break's art swaps or story modifications.
@@ -155,6 +158,9 @@ def base_overrides(builder, adapter, p, decks):
         if 'portrait' in o:
             for ext in ('ncgr', 'ncer', 'nanr', 'nclr'):
                 builder.put(w11npc.DUEL_BU_PAC, f'bu{chara:03d}_r.lz{ext}', portraits[f'bu{o["portrait"]:03d}_r.lz{ext}'])
+            if b['list'].startswith('tag'):
+                stock = nttx.lz_decompress(portraits[f'bu{chara:03d}_r.lzncer'])
+                tag_list_cell(builder, chara, bustup.cell_x(stock, 0) - bustup.cell_x(stock, 1))
             if o['portrait'] in source.char_deck:
                 offsets = bytearray(builder.get(w11npc.BIN_PAC, 'character.bin'))
                 offsets[slot] = builder.files[w11npc.BIN_PAC]['character.bin'][source.char_deck[o['portrait']]]
@@ -164,6 +170,13 @@ def base_overrides(builder, adapter, p, decks):
 
 
 TAG_TEAM_FIRST = 49
+TAG_FIRST_MEMBER_DX = 64
+
+
+def tag_list_cell(builder, chara, dx):
+    name = f'bu{chara:03d}_r.lzncer'
+    ncer = nttx.lz_decompress(builder.get(w11npc.DUEL_BU_PAC, name))
+    builder.put(w11npc.DUEL_BU_PAC, name, w11npc.lz11_literal(bustup.shift_cell(ncer, 0, 1, dx)))
 
 
 def tag_teams(builder, adapter, p):

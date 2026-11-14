@@ -14,9 +14,11 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).parent))
 from adapter import Adapter
+import bustup
 import carddb
 import game
 import modspec
+import nttx
 import patch
 import w11packs
 from model import NEWER, diagnostics, encode, project, prune_base_cpus, read_project, to_file
@@ -299,6 +301,12 @@ class RomIntegrationTests(unittest.TestCase):
         for ext in ('ncgr', 'ncer', 'nanr', 'nclr'):
             self.assertEqual(built_bu[f'bu301_r.lz{ext}'], clean_bu[f'bu129_r_e.lz{ext}'])
             self.assertEqual(built_bu[f'bu401_r.lz{ext}'], clean_bu[f'bu301_r.lz{ext}'])
+        stock = nttx.lz_decompress(clean_bu['bu300_r.lzncer'])
+        for chara in (465, 466):
+            ncer = nttx.lz_decompress(built_bu[f'bu{chara}_r.lzncer'])
+            self.assertEqual(bustup.cell_x(ncer, 0), bustup.cell_x(stock, 1) + 64)
+            self.assertEqual([bustup.parse_oams(ncer, k) for k in range(1, 5)],
+                             [bustup.parse_oams(stock, k) for k in range(1, 5)])
         self.assertEqual(built_bin['character.bin'][turbo['slot']], clean_bin['character.bin'][regular['slot']])
         bin2 = game.container_files(rom, a.profile['card_db']['container'])
         text = carddb.read_strtab(bin2['game_indx_e.bin'], bin2['game_text_e.bin'], 1, 0, 'e')[1]
