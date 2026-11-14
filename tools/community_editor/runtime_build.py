@@ -70,6 +70,8 @@ def prepare(folder, adapter, p, extra):
             else:
                 spec['rating'] = struct.unpack_from('<H', builder.files[w11npc.BIN_PAC]['enemystatus.bin'],
                                                    o.get('template_deck', 113) * 12 + 2)[0]
+            if 'stats' in o:
+                spec['stats'] = o['stats']
             if 'talk' in o:
                 spec['talk'] = {'e':o['talk']}
             report.append(builder.opponent(spec, str(folder)))
@@ -132,10 +134,11 @@ def base_overrides(builder, adapter, p, decks):
             for sec in ('main', 'extra', 'side'):
                 setattr(deck, sec, [adapter.resolve(n) for n in decks[o['deck']][sec]])
             builder.put(w11npc.DECK_PAC, b['deck'], deck.build())
-        if {'rating', 'key_card', 'talk'} & set(o):
+        if {'rating', 'stats', 'key_card', 'talk'} & set(o):
             status = bytearray(builder.get(w11npc.BIN_PAC, 'enemystatus.bin'))
             row = list(struct.unpack_from('<HHB5BH', status, slot * 12))
             row[1] = o.get('rating', row[1])
+            row[3:8] = o.get('stats', row[3:8])
             if 'key_card' in o:
                 row[8] = adapter.resolve(o['key_card'])
             if 'talk' in o:

@@ -7,7 +7,7 @@ FORMAT = 'wc-mod-project'
 VERSION = 1
 FORMAT_VERSION = 2
 SECTIONS = {'packs': 1, 'decks': 1, 'cpus': 3, 'banlists': 1, 'patches': 1}
-BASE_CPU_FIELDS = ('name', 'deck', 'deck_name', 'portrait', 'key_card', 'rating', 'talk')
+BASE_CPU_FIELDS = ('name', 'deck', 'deck_name', 'portrait', 'key_card', 'rating', 'stats', 'talk')
 NEWER = 'This project was made with a newer tool. Update the Workshop to open it.'
 ADAPTER = 'wc2011-eu'
 RARITIES = ('ultra', 'super', 'rare', 'common')
@@ -223,6 +223,9 @@ def check_cpu_fields(o):
         raise ValueError('CPU deck name must be text.')
     if 'rating' in o and (type(o['rating']) is not int or not 0 <= o['rating'] <= 65535):
         raise ValueError('CPU rating must be a whole number from 0 to 65535.')
+    if 'stats' in o and (not isinstance(o['stats'], list) or len(o['stats']) != 5
+                         or any(type(v) is not int or not 0 <= v <= 255 for v in o['stats'])):
+        raise ValueError('CPU stats must be five whole numbers from 0 to 255.')
 
 
 def check_talk(talk, shape):

@@ -197,7 +197,7 @@ class ProjectFormatTests(unittest.TestCase):
         p = read_project(old, 'test')
         self.assertEqual(p['base_cpus'], {})
         self.assertEqual(to_file(p)['sections']['cpus']['base'], {})
-        for bad in ({'301': {'turbo': True}}, {'465': {'rating': 1}}, {'301': {'rating': 65536}}, {'301': {'talk': {'28': 'Hi'}}}):
+        for bad in ({'301': {'turbo': True}}, {'465': {'rating': 1}}, {'301': {'rating': 65536}}, {'301': {'stats': [1, 2, 3, 4, 256]}}, {'301': {'talk': {'28': 'Hi'}}}):
             f['sections']['cpus']['base'] = bad
             with self.assertRaises(ValueError):
                 read_project(f, 'test')
@@ -264,7 +264,7 @@ class RomIntegrationTests(unittest.TestCase):
         talk = list(regular['talk'])
         talk[0], talk[25] = 'Workshop line 0', 'Workshop tag win'
         p['base_cpus'] = {'301': {'name': 'Workshop Moja', 'deck_name': 'Workshop Deck', 'deck': d['file'],
-                                  'portrait': 129, 'key_card': 'id:4007', 'rating': 2345,
+                                  'portrait': 129, 'key_card': 'id:4007', 'rating': 2345, 'stats': [1, 2, 3, 4, 255],
                                   'talk': {'0': talk[0], '25': talk[25]}},
                           '401': {'name': 'Workshop Rider', 'portrait': 301, 'rating': 1999,
                                   'deck_name': turbo['deck_name']}}
@@ -276,7 +276,7 @@ class RomIntegrationTests(unittest.TestCase):
         self.assertEqual(a.validate(p), [])
         bps, report = a.build(p)
         self.assertEqual([(r['base_chara'], r['changed']) for r in report['base_cpus']],
-                         [(301, ['deck', 'deck_name', 'key_card', 'name', 'portrait', 'rating', 'talk']),
+                         [(301, ['deck', 'deck_name', 'key_card', 'name', 'portrait', 'rating', 'stats', 'talk']),
                           (401, ['name', 'portrait', 'rating'])])
         rom = ndspy.rom.NintendoDSRom(patch.apply(a.path.read_bytes(), bps))
         clean_bin, built_bin = (game.container_files(r, 'Data_arc_pac/bin.pac') for r in (a.rom, rom))
@@ -285,7 +285,7 @@ class RomIntegrationTests(unittest.TestCase):
             if slot not in (regular['slot'], turbo['slot']):
                 self.assertEqual(row(built_bin, slot), row(clean_bin, slot))
         got, old = row(built_bin, regular['slot']), row(clean_bin, regular['slot'])
-        self.assertEqual((got[0], got[1], got[3:8], got[8]), (old[0], 2345, old[3:8], 4007))
+        self.assertEqual((got[0], got[1], got[3:8], got[8]), (old[0], 2345, (1, 2, 3, 4, 255), 4007))
         lines = built_bin['talkmsg_e.bin'].split(b'\0')
         self.assertEqual([s.decode() for s in lines[56 + (got[2] - 1) * 28:][:28]], talk)
         got, old = row(built_bin, turbo['slot']), row(clean_bin, turbo['slot'])

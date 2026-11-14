@@ -141,7 +141,7 @@ class Adapter:
             t = templates[source.char_deck[chara]]
             base.append({'chara':chara, 'list':roster, 'duelist':duelist, 'slot':t['slot'], 'name':t['name'],
                          'deck':t['file'], 'deck_name':t['deck_name'], 'portrait':t['portrait'],
-                         'key_card':t['key_card'], 'rating':t['rating'], 'talk':t['talk'], **extra})
+                         'key_card':t['key_card'], 'rating':t['rating'], 'stats':t['stats'], 'talk':t['talk'], **extra})
         for roster, first, count in FREE_DUEL_LISTS:
             for duelist in range(first, first + count):
                 add(roster, duelist)

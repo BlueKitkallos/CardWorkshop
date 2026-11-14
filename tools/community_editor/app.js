@@ -9,7 +9,8 @@ const storageKey='wc-community-editor-recovery-v1';
 let cpuMetadata,cpuLoading,returnToCpu,baseBanlists,baseBanlistsLoading,openingReady=false,deckRule;
 let tabSelections={},fieldId=0,undoStack=[],redoStack=[],lastState,savedState,toastTimer,addSection='main',addRarity='common';
 const sectionViews=new Map(),tabViews=new Map(),displayNames=new Map(),byPassword=new Map();
-const baseFields=['name','deck','deck_name','portrait','key_card','rating','talk'];
+const baseFields=['name','deck','deck_name','portrait','key_card','rating','stats','talk'];
+const statNames=['Attack','Defense','Luck','Strategy','Life'];
 let baseCache={project:null,items:new Map()};
 function baseCpu(chara){return cpuMetadata?.base.find(b=>b.chara===chara);}
 function selectedBase(){return typeof selected==='string'&&selected.startsWith('base:')?Number(selected.slice(5)):null;}
@@ -257,7 +258,7 @@ function cpuPicker(item,mode){
    b.onclick=()=>{
     if(mode==='portrait'){item.portrait=entry.id;changed();editor();}
     else{
-     item.template_deck=entry.slot;item.portrait=entry.portrait;item.key_card=entry.key_card;item.rating=entry.rating;
+     item.template_deck=entry.slot;item.portrait=entry.portrait;item.key_card=entry.key_card;item.rating=entry.rating;delete item.stats;
      item.deck_name=entry.deck_name;delete item.talk;
      if(!item.name||item.name==='New CPU')item.name=entry.name;
      copyCpuDeck(item,entry.file);
@@ -328,6 +329,9 @@ function renderCpu(root,item){
  root.append(keyCardControl(item,d));
  const meta=base||cpuMetadata.templates.find(t=>t.slot===(item.template_deck??113));
  root.append(numberField('Rating',item.rating??meta?.rating??1000,0,65535,v=>{const n=Number(v);if(!Number.isInteger(n)||n<0||n>65535){toast('Rating must be from 0 to 65535.');editor();return;}item.rating=n;changed();}));
+ const stats=item.stats??meta?.stats??[50,50,50,50,50],statRow=el('div',{class:'row cpu-stats'});
+ statNames.forEach((name,i)=>statRow.append(numberField(name,stats[i],0,255,v=>{const n=Number(v);if(!Number.isInteger(n)||n<0||n>255){toast(`${name} must be from 0 to 255.`);editor();return;}item.stats=[...stats];item.stats[i]=n;changed();})));
+ root.append(statRow);
  const advanced=el('details',{class:'cpu-settings'});advanced.append(el('summary',{},'More settings'));
  if(!base){
   const mode=el('select',{'aria-label':'CPU list'});for(const [kind,label] of Object.entries(rosters))mode.append(el('option',{value:kind},label));mode.value=roster(item);mode.onchange=()=>{item.turbo=mode.value.endsWith('turbo');if(mode.value.startsWith('tag')){item.tag=true;item.partner??=cpuMetadata.base.find(b=>b.list===mode.value)?.chara;item.team_name??='New team';}else{delete item.tag;delete item.partner;delete item.team_name;}changed();list();editor();};root.append(labelControl('List',mode),mode);
