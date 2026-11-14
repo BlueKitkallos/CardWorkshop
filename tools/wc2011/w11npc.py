@@ -24,6 +24,7 @@ SCRIPT_PAC = 'Data_arc_pac/RPG_SCRIPT_J'
 MES_IDX_PAC = 'Data_arc_pac/RPG_SCRIPT_MES_IDX'
 MES_TXT_PAC = 'Data_arc_pac/RPG_SCRIPT_MES_TXT'
 MES_LANGS = 'jegfisk'
+RATING_MAX = 0xffff
 TALK_BU_PAC = 'Data_arc_pac/RPG2D_BU'
 DUEL_BU_PAC = 'Data_arc_pac/duel2d/BustupR'
 MODEL_PAC = 'Data_arc_pac/RPG3D'
@@ -967,8 +968,8 @@ class Builder:
         self.claimed[deck_no] = where
         self.put(DECK_PAC, name, deck.build())
         if 'rating' in spec:
-            if not 0 <= int(spec['rating']) <= 0xffff:
-                raise SystemExit(f'{where}: rating {spec["rating"]}: 0-65535')
+            if not 0 <= int(spec['rating']) <= RATING_MAX:
+                raise SystemExit(f'{where}: rating {spec["rating"]}: 0-{RATING_MAX}')
             st = bytearray(self.get(BIN_PAC, 'enemystatus.bin'))
             struct.pack_into('<H', st, deck_no * 12 + 2, int(spec['rating']))
             self.put(BIN_PAC, 'enemystatus.bin', bytes(st))
@@ -1670,6 +1671,8 @@ def opponent_status(spec):
     status.setdefault('template_deck', 0x71)
     status.setdefault('rating', spec.get('rating', 1000))
     status.setdefault('key_card', spec['card'])
+    if not 0 <= int(status['rating']) <= RATING_MAX:
+        raise SystemExit(f'{spec.get("name", "?")}: rating {status["rating"]}: 0-{RATING_MAX}')
     return status
 
 

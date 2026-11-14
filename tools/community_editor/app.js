@@ -326,15 +326,15 @@ function renderCpu(root,item){
  const d=project.decks.find(d=>d.file===item.deck);
  if(d){root.append(el('p',{class:'muted'},`${d.main.length} Main · ${d.extra.length} Extra · ${d.side.length} Side`));const error=deckError(d)||(d.main.length<40?'The Main Deck needs at least 40 cards.':null);if(error)root.append(notice(error));}
  root.append(keyCardControl(item,d));
- const advanced=el('details',{class:'cpu-settings'});advanced.append(el('summary',{},'Dialogue & rating'));
+ const meta=base||cpuMetadata.templates.find(t=>t.slot===(item.template_deck??113));
+ root.append(numberField('Rating',item.rating??meta?.rating??1000,0,65535,v=>{const n=Number(v);if(!Number.isInteger(n)||n<0||n>65535){toast('Rating must be from 0 to 65535.');editor();return;}item.rating=n;changed();}));
+ const advanced=el('details',{class:'cpu-settings'});advanced.append(el('summary',{},'More settings'));
  if(!base){
   const mode=el('select',{'aria-label':'CPU list'});for(const [kind,label] of Object.entries(rosters))mode.append(el('option',{value:kind},label));mode.value=roster(item);mode.onchange=()=>{item.turbo=mode.value.endsWith('turbo');if(mode.value.startsWith('tag')){item.tag=true;item.partner??=cpuMetadata.base.find(b=>b.list===mode.value)?.chara;item.team_name??='New team';}else{delete item.tag;delete item.partner;delete item.team_name;}changed();list();editor();};root.append(labelControl('List',mode),mode);
   if(item.tag){const partner=el('select',{'aria-label':'Tag partner'});for(const c of [...cpuMetadata.base.map(b=>b.chara),...project.opponents.map(o=>o.chara)].filter(c=>c!==item.chara))partner.append(el('option',{value:c},cpuName(c)));partner.value=item.partner;partner.onchange=()=>{item.partner=Number(partner.value);changed();};root.append(labelControl('Partner',partner),partner,field('Team name',item.team_name||'',v=>{item.team_name=v;changed();list();}));}
   const template=el('select',{'aria-label':'Base game template'});cpuMetadata.templates.forEach(t=>template.append(el('option',{value:t.slot},t.name+' · '+t.deck_name)));template.value=item.template_deck??113;template.onchange=()=>{item.template_deck=Number(template.value);changed();editor();$('#editor .cpu-settings').open=true;};advanced.append(labelControl('Copy dialogue from',template),template);
  }
  root.append(advanced);
- const meta=base||cpuMetadata.templates.find(t=>t.slot===(item.template_deck??113));
- advanced.append(numberField('Rating',item.rating??meta?.rating??1000,0,65535,v=>{const n=Number(v);if(!Number.isInteger(n)||n<0||n>65535){toast('Rating must be from 0 to 65535.');editor();return;}item.rating=n;changed();}));
  const talk=el('details',{class:'cpu-dialogue'});talk.append(el('summary',{},'Dialogue'));
  const reset=el('button',{},base?'Use base game dialogue':'Use template dialogue');reset.onclick=()=>{if(base)item.talk=structuredClone(base.talk);else delete item.talk;changed();editor();};talk.append(reset);
  const lines=item.talk||meta?.talk||[];

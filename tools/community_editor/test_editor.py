@@ -197,7 +197,7 @@ class ProjectFormatTests(unittest.TestCase):
         p = read_project(old, 'test')
         self.assertEqual(p['base_cpus'], {})
         self.assertEqual(to_file(p)['sections']['cpus']['base'], {})
-        for bad in ({'301': {'turbo': True}}, {'465': {'rating': 1}}, {'301': {'talk': {'28': 'Hi'}}}):
+        for bad in ({'301': {'turbo': True}}, {'465': {'rating': 1}}, {'301': {'rating': 65536}}, {'301': {'talk': {'28': 'Hi'}}}):
             f['sections']['cpus']['base'] = bad
             with self.assertRaises(ValueError):
                 read_project(f, 'test')
